@@ -27,7 +27,7 @@ RUN sed -i 's/\r$//' /app/scripts/docker-entrypoint.sh \
 # БД, токены и логи должны жить в volume (см. docker-compose.yml / хост)
 VOLUME ["/app/data", "/app/logs"]
 
-EXPOSE 3000
+EXPOSE 8000
 
 ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
 CMD ["python", "main.py"]
