@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import tempfile
 
+import pytest
+
 from app.config import Config
 from app.core.bot import ClanBot
 
@@ -53,7 +55,11 @@ class _SyncBot(ClanBot):
         return self._fake_tree
 
 
-def _bot(tree: _FakeTree | None = None, guild_id: int | None = 653949456630153216) -> _SyncBot:
+def _bot(
+    tree: _FakeTree | None = None,
+    guild_id: int | None = 653949456630153216,
+    panel_port: int | None = None,
+) -> _SyncBot:
     with tempfile.TemporaryDirectory() as tmp:
         config = Config(
             token="dummy",
@@ -63,6 +69,7 @@ def _bot(tree: _FakeTree | None = None, guild_id: int | None = 65394945663015321
             status_activity="test",
             owner_id=None,
             guild_id=guild_id,
+            panel_port=panel_port,
         )
         return _SyncBot(config, tree or _FakeTree())
 
@@ -105,3 +112,66 @@ async def test_до_логина_синк_пропускается():
     bot.__class__ = _LoggedOut
     await bot._sync_commands()
     assert tree.synced_with == []
+
+
+class _BusyPortPanel:
+    """Веб-панель, которая не смогла занять порт."""
+
+    def __init__(self, _bot) -> None:
+        pass
+
+    async def start(self) -> None:
+        # Windows и Linux отдают конфликт по порту как OSError 10048/98.
+        raise OSError(10048, "адрес уже используется")
+
+
+async def test_занятый_порт_панели_не_роняет_бота(monkeypatch):
+    bot = _bot(panel_port=3000)
+    monkeypatch.setattr("app.core.webpanel.WebPanel", _BusyPortPanel)
+
+    await bot._start_webpanel()
+
+    assert bot.webpanel is None
+
+
+async def test_панель_включается_на_свободном_порту(monkeypatch):
+    bot = _bot(panel_port=3000)
+    started: list[object] = []
+
+    class _Panel:
+        def __init__(self, target) -> None:
+            self._target = target
+
+        async def start(self) -> None:
+            started.append(self._target)
+
+    monkeypatch.setattr("app.core.webpanel.WebPanel", _Panel)
+
+    await bot._start_webpanel()
+
+    assert started == [bot]
+    assert bot.webpanel is not None
+
+
+async def test_ошибка_безопасности_панели_остаётся_фатальной(monkeypatch):
+    """Публичная панель без пароля обязана ронять старт, а не молча отключаться."""
+    bot = _bot(panel_port=3000)
+
+    class _InsecurePanel:
+        def __init__(self, _bot) -> None:
+            pass
+
+        async def start(self) -> None:
+            raise RuntimeError("PANEL_PASSWORD обязателен")
+
+    monkeypatch.setattr("app.core.webpanel.WebPanel", _InsecurePanel)
+
+    with pytest.raises(RuntimeError, match="PANEL_PASSWORD"):
+        await bot._start_webpanel()
+
+
+async def test_без_panel_port_панель_не_создаётся():
+    bot = _bot()
+    await bot._start_webpanel()
+    assert bot.webpanel is None
+

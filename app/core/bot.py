@@ -80,11 +80,7 @@ class ClanBot(commands.Bot):
         self.services = root.services
         loaded = await load_cogs(self)
         await register_persistent_views(self)
-        if self.config.panel_port is not None:
-            from app.core.webpanel import WebPanel
-
-            self.webpanel = WebPanel(self)
-            await self.webpanel.start()
+        await self._start_webpanel()
         await self._sync_commands()
         # Запускаем первый backup только после bootstrap: SQLite backup API
         # использует очередь того же aiosqlite-соединения и не должен
@@ -92,6 +88,33 @@ class ClanBot(commands.Bot):
         if self.db_backups is not None:
             self.db_backups.start()
         logger.info("Хук установки завершён: когов %d, views зарегистрированы", len(loaded))
+
+    async def _start_webpanel(self) -> None:
+        """Поднимает веб-панель, не роняя бота из-за занятого порта."""
+        if self.config.panel_port is None:
+            return
+        from app.core.webpanel import WebPanel
+
+        panel = WebPanel(self)
+        try:
+            await panel.start()
+        except OSError as exc:
+            # Панель — вспомогательный инструмент, и её недоступность не должна
+            # ронять бота: конфликт по порту (например, уже запущенный экземпляр)
+            # раньше поднимал OSError прямо в setup_hook, и процесс падал с голым
+            # трейсбеком ещё до подключения к Discord. OSError покрывает занятый
+            # порт, запрет на bind и неверный PANEL_HOST.
+            # RuntimeError намеренно не ловится: это проверка безопасности, и
+            # публичная панель без пароля обязана не стартовать вообще.
+            logger.error(
+                "Веб-панель не запущена: не удалось занять %s:%d (%s). Бот работает без панели. "
+                "Если порт держит другой экземпляр бота — остановите его, иначе смените PANEL_PORT в .env.",
+                self.config.panel_host or "127.0.0.1",
+                self.config.panel_port,
+                exc,
+            )
+            return
+        self.webpanel = panel
 
     async def _sync_commands(self) -> None:
         if self.user is None or self.application_id is None:
