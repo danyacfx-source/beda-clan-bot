@@ -37,6 +37,7 @@ def _services(bot: ClanBot) -> Services:
 
 COG_PROVIDERS: dict[str, Callable[[ClanBot], object]] = {
     "settings": lambda b: _services(b).settings,
+    "announce": lambda b: _services(b).announce,
     "moderation": lambda b: _services(b).moderation,
     "cases": lambda b: _services(b).cases,
     "tickets": lambda b: _services(b).tickets,

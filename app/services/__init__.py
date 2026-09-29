@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.services.announce_service import AnnounceService
 from app.services.birthday_service import BirthdayService
 from app.services.dossier_service import DossierService
 from app.services.event_service import EventService
@@ -34,6 +35,7 @@ from app.services.where_play_service import WherePlayService
 @dataclass(slots=True)
 class Services:
     settings: SettingsService
+    announce: AnnounceService
     #: Точечные настройки модулей: БД поверх .env. См. app/core/module_settings.py
     module_settings: ModuleSettingsService
     moderation: ModerationService

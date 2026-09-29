@@ -47,6 +47,7 @@ def assemble(
     from app.db.warns_repository import WarnsRepository
     from app.db.where_play_repository import WherePlayRepository
     from app.services import Services
+    from app.services.announce_service import AnnounceService
     from app.services.birthday_service import BirthdayService
     from app.services.dossier_service import DossierService
     from app.services.event_service import EventService
@@ -65,11 +66,12 @@ def assemble(
 
     # --- Репозитории (слой данных) ---
     settings_repo = override_or(overrides, "settings_repo", SettingsRepository, db)
-    override_or(overrides, "kv_repo", KvRepository, db)
+    kv_repo = override_or(overrides, "kv_repo", KvRepository, db)
     module_settings_repo = override_or(overrides, "module_settings_repo", ModuleSettingsRepository, db)
 
     # --- Сервисы, зависящие только от репозиториев ---
     settings = override_or(overrides, "settings", SettingsService, settings_repo)
+    announce = override_or(overrides, "announce", AnnounceService, kv_repo)
     module_settings = override_or(overrides, "module_settings", ModuleSettingsService, module_settings_repo, config)
     reminders = override_or(overrides, "reminders", ReminderService, RemindersRepository(db))
     polls = override_or(overrides, "polls", PollService, PollsRepository(db))
@@ -101,6 +103,7 @@ def assemble(
 
     services = Services(
         settings=settings,
+        announce=announce,
         module_settings=module_settings,
         moderation=moderation,
         cases=cases,
