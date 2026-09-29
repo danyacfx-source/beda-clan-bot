@@ -70,6 +70,14 @@ async def _preflight(config: Config) -> None:
     )
     logger.info("Запрошенные privileged-интенты: %s", ", ".join(required))
     logger.info("Проверить настройки интентов: %s", _APPLICATION_URL.format(me.get("id")))
+    # Значения из .env перекрывают дефолты кода, поэтому печатаем эффективные:
+    # иначе лимиты из старой копии .env выглядят как баг в коде.
+    logger.info(
+        "Код подключения «Где играем»: от %d до %d символов%s",
+        config.join_code_min,
+        config.join_code_max,
+        f" (БД: {config.database_url.split('@')[-1]})" if config.database_url else f" (БД: {config.db_path})",
+    )
 
 
 def main() -> None:
