@@ -1,0 +1,48 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      # Веб-панель слушает только внутреннюю сеть Docker: наружу не публикуется.
+      PANEL_HOST: 0.0.0.0
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "3000"
+    networks:
+      - internal
+
+  # Опционально: включается только при миграции на PostgreSQL:
+  # docker compose --profile postgres up -d postgres
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bedaclan}
+      POSTGRES_USER: ${POSTGRES_USER:-bedaclan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+networks:
+  internal:
+    internal: true
+
+volumes:
+  postgres_data:

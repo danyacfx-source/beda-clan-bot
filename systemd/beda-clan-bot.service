@@ -1,0 +1,20 @@
+[Unit]
+Description=BEDA Clan Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=discord
+Group=discord
+WorkingDirectory=/opt/beda-clan-bot
+EnvironmentFile=/opt/beda-clan-bot/.env
+ExecStart=/opt/beda-clan-bot/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+# Защита от утечки памяти: перезапуск при длительном разрастании
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
