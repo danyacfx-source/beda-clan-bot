@@ -1,4 +1,4 @@
-"""Синхронизация команд: глобальный список не должен стирать команды гильдии."""
+"""Синхронизация команд: guild sync доступен сразу и не ждёт кеш сервера."""
 from __future__ import annotations
 
 import os
@@ -67,8 +67,7 @@ def _bot(tree: _FakeTree | None = None, guild_id: int | None = 65394945663015321
         return _SyncBot(config, tree or _FakeTree())
 
 
-async def test_синк_идёт_только_в_глобальный_список():
-    """Гильдейский sync отправил бы пустой список и стёр бы команды сервера."""
+async def test_без_guild_id_синк_идёт_в_глобальный_список():
     tree = _FakeTree()
     bot = _bot(tree, guild_id=None)
     await bot._sync_commands()
@@ -76,42 +75,22 @@ async def test_синк_идёт_только_в_глобальный_списо
     assert tree.copied_to == []
 
 
-class _FakeGuild:
-    def __init__(self, guild_id: int) -> None:
-        self.id = guild_id
-
-
-async def test_глобальные_команды_копируются_в_гильдию():
-    """Гильдейская копия применяется мгновенно, глобальная — до часа.
-
-    Копирование живёт в on_ready, а не в setup_hook: setup_hook выполняется
-    внутри login() до подключения к шлюзу, когда гильдий в кэше ещё нет.
-    """
-    tree = _FakeTree()
-    bot = _bot(tree)
-    guild = _FakeGuild(653949456630153216)
-    bot.get_guild = lambda guild_id: guild if guild_id == guild.id else None
-    await bot.on_ready()
-    assert tree.copied_to == [guild.id]
-    assert tree.synced_with == [guild]
-
-
-async def test_копирование_в_гильдию_не_повторяется_при_reconnect():
-    tree = _FakeTree()
-    bot = _bot(tree)
-    guild = _FakeGuild(653949456630153216)
-    bot.get_guild = lambda _guild_id: guild
-    await bot.on_ready()
-    await bot.on_ready()
-    assert tree.copied_to == [guild.id]
-
-
-async def test_без_гильдии_в_кэше_копирование_пропускается():
+async def test_команды_синхронизируются_в_гильдию_без_кеша():
     tree = _FakeTree()
     bot = _bot(tree)
     bot.get_guild = lambda _guild_id: None
+    await bot._sync_commands()
+    assert tree.copied_to == [653949456630153216]
+    assert [item.id for item in tree.synced_with] == [653949456630153216]
+
+
+async def test_on_ready_не_дублирует_guild_sync():
+    tree = _FakeTree()
+    bot = _bot(tree)
+    await bot._sync_commands()
     await bot.on_ready()
-    assert tree.copied_to == []
+    assert tree.copied_to == [653949456630153216]
+    assert [item.id for item in tree.synced_with] == [653949456630153216]
 
 
 async def test_до_логина_синк_пропускается():

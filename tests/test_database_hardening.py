@@ -25,7 +25,7 @@ async def test_database_migrations_integrity_and_backup(tmp_path: Path) -> None:
     row = await restored.fetchone("SELECT value FROM kv WHERE key = ?", ("health",))
     assert row is not None and row["value"] == "ok"
     migrations = await restored.fetchall("SELECT version FROM schema_migrations ORDER BY version")
-    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     await restored.increment_activity(1, "2026-09-24T00:00:00+00:00")
     activity = await restored.list_activity(1)
     assert activity[0]["messages"] == 1
@@ -103,6 +103,7 @@ async def test_database_reports_backend(tmp_path: Path) -> None:
 async def test_backup_manager_explains_missing_pg_dump(tmp_path: Path, monkeypatch) -> None:
     database = Database(str(tmp_path / "source.db"))
     await database.connect()
+    await database.close()
     database._postgres = object()
     manager = DatabaseBackupManager(database, tmp_path / "backups", interval_hours=1, retention=2)
 

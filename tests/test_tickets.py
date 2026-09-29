@@ -8,11 +8,14 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
+
 from app.config import Config
 from app.core.composition import assemble
 from app.db.database import Database
 
 GILD_ID = 1234
+_CategoryChannel = type("CategoryChannel2", (discord.CategoryChannel,), {})
 
 
 def _config(tmp: str) -> Config:
@@ -191,6 +194,39 @@ async def test_create_uses_editable_texts(tmp_path) -> None:
         assert isinstance(view, TicketCloseView)
         assert view.close_ticket.label == "Завершить"
         assert view.close_ticket.emoji is None
+    finally:
+        await db.close()
+
+
+async def test_create_uses_config_ticket_category_and_support_roles(tmp_path) -> None:
+    tickets, db = await _setup(str(tmp_path))
+    try:
+        category = _CategoryChannel.__new__(_CategoryChannel)
+        category.id = 700
+        support_role = MagicMock(id=701)
+        channel = _channel(558)
+        guild = _guild([channel, category])
+        guild.get_role.return_value = support_role
+        guild.create_text_channel = AsyncMock(return_value=channel)
+        tickets._config = Config(
+            token="x",
+            prefix="!",
+            db_path=os.path.join(str(tmp_path), "bot.db"),
+            log_level="ERROR",
+            status_activity="s",
+            owner_id=None,
+            ticket_category_id=category.id,
+            ticket_support_role_ids=(support_role.id,),
+        )
+
+        result = await tickets.create(guild, _Creator(42, "vasya"))
+
+        assert result.error is None
+        kwargs = guild.create_text_channel.call_args.kwargs
+        assert kwargs["category"] is category
+        overwrite = kwargs["overwrites"][support_role]
+        assert overwrite.view_channel is True
+        assert overwrite.manage_messages is True
     finally:
         await db.close()
 
