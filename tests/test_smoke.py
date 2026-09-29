@@ -1,4 +1,5 @@
 """Smoke-тест: полная сборка бота без подключения к Discord."""
+import importlib
 import os
 import tempfile
 
@@ -6,6 +7,44 @@ import pytest
 
 from app.config import Config
 from app.core.bot import ClanBot
+
+
+def test_entrypoint_imports_existing_bot_class():
+    """main.py обязан импортировать то же имя класса, что и app.core.bot.
+
+    Точка входа лежит в корне, а не в app/, поэтому её легко не заметить при
+    переименовании: тест ловит рассинхрон на локальной машине, а не на сервере.
+    """
+    entrypoint = importlib.import_module("main")
+    assert entrypoint.ClanBot is ClanBot
+
+
+def test_no_legacy_brand_in_python_sources():
+    """Старое имя не должно оставаться нигде в импортируемом коде."""
+    import app
+
+    # Имена собираются из кусков, иначе проверка нашла бы саму себя.
+    legacy_names = ("Mega" + "Bot", "Mega" + "Cog", "mega" + "bot_")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(app.__file__)))
+    checked = 0
+    for folder in ("app", "tests", "scripts"):
+        directory = os.path.join(root, folder)
+        for current, _, files in os.walk(directory):
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(current, name)
+                with open(path, encoding="utf-8") as handle:
+                    text = handle.read()
+                checked += 1
+                for legacy in legacy_names:
+                    assert legacy not in text, f"{legacy} остался в {name}"
+    with open(os.path.join(root, "main.py"), encoding="utf-8") as handle:
+        entrypoint_source = handle.read()
+    checked += 1
+    for legacy in legacy_names:
+        assert legacy not in entrypoint_source, f"{legacy} остался в main.py"
+    assert checked > 50
 
 
 @pytest.mark.asyncio

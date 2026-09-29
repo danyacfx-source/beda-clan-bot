@@ -20,7 +20,7 @@ if os.getenv("RAM_REPORT_TRACEMALLOC", "1").strip().lower() not in ("0", "false"
     tracemalloc.start()
 
 from app.config import Config  # noqa: E402
-from app.core.bot import MegaBot  # noqa: E402
+from app.core.bot import ClanBot  # noqa: E402
 from app.core.logger import setup_logging  # noqa: E402
 
 logger = logging.getLogger("bot")
@@ -76,7 +76,7 @@ def main() -> None:
     config = Config.from_env()
     setup_logging(config.log_level)
 
-    bot = MegaBot(config)
+    bot = ClanBot(config)
     try:
         asyncio.run(_preflight(config))
     except Exception:  # noqa: BLE001
