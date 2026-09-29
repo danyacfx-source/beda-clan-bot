@@ -1,4 +1,4 @@
-"""Тесты удаления временных голосовых каналов при выходе пользователя."""
+﻿"""Тесты удаления временных голосовых каналов при выходе пользователя."""
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import discord
@@ -18,7 +18,6 @@ def _cog():
     config.temp_voice_trigger_ids = ()
     config.temp_voice_category_id = None
     cog.bot.config = config
-    cog.module_config = AsyncMock(return_value={"trigger_ids": [], "category_id": None})
     return cog
 
 
@@ -28,9 +27,21 @@ def _state(channel):
     return state
 
 
+def _real_state(channel=None):
+    """Настоящий discord.VoiceState: атрибута guild у него нет в принципе.
+
+    Конструктор требует payload от Discord, поэтому объект создаётся в обход
+    него — важен именно тип, а не заполненные поля.
+    """
+    state = object.__new__(discord.VoiceState)
+    state.channel = channel
+    return state
+
+
 def _channel(channel_id=101):
     channel = _VoiceChannel.__new__(_VoiceChannel)
     channel.id = channel_id
+    channel.category_id = None
     channel.delete = AsyncMock()
     return channel
 
@@ -74,3 +85,49 @@ async def test_delete_failure_keeps_db_row():
     await cog._remove_channel(101)
 
     cog.tempvoice.delete.assert_not_awaited()
+
+
+async def test_настоящий_voice_state_не_ломает_обработчик():
+    """Раньше гильдия бралась из after.guild, но у VoiceState нет атрибута guild.
+
+    MagicMock в остальных тестах скрывал баг: он отвечает на любой атрибут.
+    """
+    cog = _cog()
+    cog._tempvoice_config = AsyncMock(return_value={"trigger_ids": (), "category_id": None})
+    member = MagicMock()
+    member.guild.id = 653949456630153216
+
+    # Настоящие VoiceState — именно они приходят от discord.py.
+    await cog.on_voice_state_update(member, _real_state(), _real_state())
+
+    cog._tempvoice_config.assert_awaited_once_with(653949456630153216)
+
+
+@patch("app.cogs.tempvoice.tempvoice.discord.VoiceChannel", new=_VoiceChannel)
+async def test_вход_в_триггер_создаёт_временный_канал():
+    cog = _cog()
+    cog._tempvoice_config = AsyncMock(return_value={"trigger_ids": (101,), "category_id": None})
+    cog.tempvoice.channel_of_owner = AsyncMock(return_value=None)
+    cog.tempvoice.create = AsyncMock()
+
+    trigger = _channel(101)
+    trigger.guild = MagicMock()
+    created = _channel(555)
+    created.send = AsyncMock()
+    trigger.guild.create_voice_channel = AsyncMock(return_value=created)
+
+    member = MagicMock()
+    member.id = 4242
+    member.display_name = "Тест"
+    member.guild.id = 653949456630153216
+    member.move_to = AsyncMock()
+
+    after = _real_state()
+    after.channel = trigger
+
+    await cog.on_voice_state_update(member, _real_state(), after)
+
+    trigger.guild.create_voice_channel.assert_awaited_once()
+    cog.tempvoice.create.assert_awaited_once()
+    member.move_to.assert_awaited_once_with(created)
+
