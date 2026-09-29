@@ -420,6 +420,18 @@ class Database:
                 """
             )
             await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (10, datetime('now'))")
+        if 11 not in applied:
+            await conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS module_settings (
+                    guild_id INTEGER NOT NULL,
+                    module   TEXT    NOT NULL,
+                    value    TEXT    NOT NULL,
+                    PRIMARY KEY (guild_id, module)
+                );
+                """
+            )
+            await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (11, datetime('now'))")
         conn = self.conn
         cursor = await conn.execute("PRAGMA table_info(guild_settings)")
         rows = await cursor.fetchall()

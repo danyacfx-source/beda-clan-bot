@@ -84,12 +84,18 @@ class ModuleSettingsService:
         if module not in SPEC_BY_KEY:
             raise ValueError(f"Неизвестный модуль: {module}")
         clean: dict[str, Any] = {}
+        cleared: set[str] = set()
         for key, raw in values.items():
             field = field_by_key(module, key)
             if field is None:
                 raise ValueError(f"Неизвестная настройка: {module}.{key}")
+            if _is_blank(raw):
+                cleared.add(key)
+                continue
             clean[key] = to_jsonable(normalize(field, raw))
         current = dict((await self._overrides(guild_id)).get(module, {}))
+        for key in cleared:
+            current.pop(key, None)
         current.update(clean)
         if current:
             await self._repo.set_values(guild_id, module, current)
@@ -108,3 +114,14 @@ class ModuleSettingsService:
             self._cache.clear()
         else:
             self._cache.pop(guild_id, None)
+
+
+def _is_blank(value: Any) -> bool:
+    """Пустое значение = снять переопределение и вернуться к ``.env``."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set)):
+        return len(value) == 0
+    return False

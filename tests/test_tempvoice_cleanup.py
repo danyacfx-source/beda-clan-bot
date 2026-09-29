@@ -18,6 +18,7 @@ def _cog():
     config.temp_voice_trigger_ids = ()
     config.temp_voice_category_id = None
     cog.bot.config = config
+    cog.module_config = AsyncMock(return_value={"trigger_ids": [], "category_id": None})
     return cog
 
 

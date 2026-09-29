@@ -314,7 +314,7 @@ _SPECS: tuple[ModuleSpec, ...] = (
                 kind=INT,
                 attr="automod_max_messages_in_window",
                 env="AUTOMOD_MAX_MESSAGES_IN_WINDOW",
-                minimum=1,
+                minimum=0,
                 maximum=100,
             ),
             ModuleField(
@@ -470,11 +470,20 @@ def field_by_key(module_key: str, field_key: str) -> ModuleField | None:
 
 
 def defaults_for(module_key: str, config: Any) -> dict[str, Any]:
-    """Значения по умолчанию модуля, взятые из ``Config``."""
+    """Значения по умолчанию, читаемые из ``Config``.
+
+    Отсутствующие или некорректные атрибуты конфига не роняют чтение: поле
+    становится ``None``/пустым, чтобы модуль мог работать с частичным конфигом.
+    """
     spec = SPEC_BY_KEY[module_key]
     result: dict[str, Any] = {}
+    empty = {BOOL: False, IDS: [], TEXT: "", JSON: ""}
     for field in spec.fields:
-        result[field.key] = normalize(field, getattr(config, field.attr, None))
+        value = getattr(config, field.attr, None)
+        try:
+            result[field.key] = normalize(field, value)
+        except ValueError:
+            result[field.key] = empty.get(field.kind)
     return result
 
 

@@ -204,6 +204,19 @@ class WherePlayService(BaseService["WherePlayRepository"]):
             circuit_reset_seconds=bot.config.api_circuit_reset_seconds,
         )
         self._snapshot = ServerSnapshot(self._api, bot.config.where_play_api_url)
+        self._module_settings: Any = None
+
+    def attach_module_settings(self, module_settings: Any) -> None:
+        """Даёт сервису доступ к настройкам модуля (вызывает composition root)."""
+        self._module_settings = module_settings
+
+    async def _where_play_conf(self, guild_id: int) -> dict[str, Any]:
+        """Настройки модуля с откатом на ``.env``, если сервис не подключён."""
+        if self._module_settings is None:
+            from app.core.module_settings import defaults_for
+
+            return defaults_for("where_play", self.bot.config)
+        return await self._module_settings.get(guild_id, "where_play")
 
     async def close(self) -> None:
         await self._api.close()
@@ -222,7 +235,8 @@ class WherePlayService(BaseService["WherePlayRepository"]):
 
     async def select_server(self, guild_id: int, code: str, team: str, caller_id: int) -> WherePlayRow | None:
         """Проверяет код по свежему снапшоту и сохраняет выбор."""
-        normalized = normalize_join_code(code, minimum=self.bot.config.join_code_min, maximum=self.bot.config.join_code_max)
+        conf = await self._where_play_conf(guild_id)
+        normalized = normalize_join_code(code, minimum=conf["join_code_min"], maximum=conf["join_code_max"])
         if team not in TEAMS:
             raise WherePlayError("Выберите команду из списка: 🔵 Синие, 🔴 Красные или 🟢 Зелёные.")
         snapshot = await self._snapshot.get()

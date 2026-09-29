@@ -50,6 +50,7 @@ let embeds = [newEmbed()];
 let btnRows = [[]];
 let settingsLoaded = false;
 let settingsData = null;
+let modulesData = null;
 let logsTimer = null;
 let auditTimer = null;
 let overviewTimer = null;
@@ -846,6 +847,7 @@ async function loadSettings() {
   settingsLoaded = true;
   renderSettings();
   renderModules();
+  loadModules();
   const am = $("set_automod_enabled");
   am.checked = !!r.data.automod_enabled;
   $("set_blocked_words").value = (r.data.blocked_words || []).join("\n");
@@ -916,26 +918,131 @@ async function saveSettings() {
 }
 function renderModules() {
   const box = $("modules-grid");
+  if (!box) return;
   box.innerHTML = "";
-  const modules = (settingsData && settingsData.modules) || {};
-  const entries = Object.entries(modules);
-  if (entries.length === 0) {
-    box.appendChild(tag("div", "muted", "Модули не найдены в .env"));
+  const modules = (modulesData && modulesData.modules) || [];
+  if (!modules.length) {
+    box.appendChild(tag("div", "muted", "Модули не найдены"));
     return;
   }
-  entries.forEach(([key, mod]) => {
-    const card = tag("div", "module-card");
-    const h = tag("h5", null, escapeHtml(MODULE_LABELS[key] || key) + '<span class="mod-env">.env</span>');
-    card.appendChild(h);
-    const vals = (Array.isArray(mod) ? mod : [mod]).slice(0, 3);
-    vals.forEach((v) => {
-      const kv = tag("div", "kv", null);
-      const prefix = typeof v === "object" && v && v.name ? v.name + ": " : "";
-      kv.append(tag("b", null, escapeHtml(prefix + String(v && v.name ? v.name : v))));
-      card.appendChild(kv);
+  modules.forEach((mod) => box.appendChild(moduleCard(mod)));
+}
+
+async function loadModules() {
+  const r = await api("/api/modules");
+  if (r.status !== 200 || !r.data.ok) { toast("❌ Не удалось загрузить модули", false); return; }
+  modulesData = r.data;
+  renderModules();
+}
+
+function moduleOptions(kind) {
+  if (!modulesData) return [];
+  if (kind === "channel") return modulesData.channels || [];
+  if (kind === "category") return modulesData.categories || [];
+  if (kind === "role") return modulesData.roles || [];
+  return [];
+}
+
+function moduleCard(mod) {
+  const card = tag("div", "module-card");
+  card.dataset.module = mod.key;
+  const head = tag("div", "row-inline", null);
+  head.style.justifyContent = "space-between";
+  head.append(tag("h5", null, escapeHtml((mod.emoji || "") + " " + mod.title)));
+  const actions = tag("div", "row-inline", null);
+  actions.style.margin = "0";
+  const save = tag("button", "btn success small", "💾");
+  save.type = "button";
+  save.title = "Сохранить модуль";
+  save.onclick = () => saveModule(mod.key, card);
+  const reset = tag("button", "btn op small", "↺");
+  reset.type = "button";
+  reset.title = "Сбросить настройки модуля на .env";
+  reset.onclick = () => resetModule(mod.key);
+  actions.append(save, reset);
+  head.append(actions);
+  card.append(head);
+  if (mod.description) card.append(tag("div", "muted small", escapeHtml(mod.description)));
+  const fields = tag("div", "module-fields", null);
+  mod.fields.forEach((f) => fields.append(moduleField(f)));
+  card.append(fields);
+  return card;
+}
+
+function moduleField(f) {
+  const wrap = tag("label", "field", null);
+  wrap.dataset.key = f.key;
+  let caption = escapeHtml(f.label);
+  if (f.overridden) caption += ' <span class="pill-env">панель</span>';
+  wrap.innerHTML = caption;
+  if (f.env) wrap.append(tag("span", "muted small", escapeHtml(f.env)));
+  let input;
+  if (f.kind === "bool") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!f.value;
+  } else if (f.kind === "int" || f.kind === "float") {
+    input = document.createElement("input");
+    input.type = "number";
+    if (f.min != null) input.min = f.min;
+    if (f.max != null) input.max = f.max;
+    input.step = f.kind === "float" ? "0.05" : "1";
+    input.value = f.value == null ? "" : f.value;
+  } else if (f.kind === "channel" || f.kind === "category" || f.kind === "role") {
+    input = document.createElement("select");
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = f.kind === "role" ? "* не задано" : "* автовыбор (не задано)";
+    input.appendChild(none);
+    moduleOptions(f.kind).forEach((o) => {
+      const opt = document.createElement("option");
+      opt.value = o.id;
+      opt.textContent = o.name;
+      input.appendChild(opt);
     });
-    box.appendChild(card);
+    input.value = f.value == null ? "" : String(f.value);
+  } else if (f.kind === "json") {
+    input = document.createElement("textarea");
+    input.rows = 3;
+    input.value = f.value || "";
+  } else {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = f.value == null ? "" : f.value;
+  }
+  input.dataset.kind = f.kind;
+  input.dataset.field = f.key;
+  wrap.append(input);
+  if (f.hint) wrap.append(tag("span", "muted small", escapeHtml(f.hint)));
+  return wrap;
+}
+
+function collectModule(card) {
+  const values = {};
+  card.querySelectorAll("[data-field]").forEach((input) => {
+    values[input.dataset.field] = input.dataset.kind === "bool" ? input.checked : input.value;
   });
+  return values;
+}
+
+async function saveModule(key, card) {
+  const r = await api("/api/modules", { module: key, values: collectModule(card) });
+  if (r.status === 200 && r.data.ok) {
+    toast("✅ Модуль сохранён", true);
+    loadModules();
+  } else {
+    toast(r.data && r.data.error ? "❌ " + r.data.error : "❌ Ошибка сохранения", false);
+  }
+}
+
+async function resetModule(key) {
+  const r = await api("/api/modules/reset", { module: key });
+  if (r.status === 200 && r.data.ok) {
+    toast("↺ Модуль сброшен на .env", true);
+    loadModules();
+  } else {
+    toast("❌ Не удалось сбросить модуль", false);
+  }
 }
 
 /* --- тест --- */

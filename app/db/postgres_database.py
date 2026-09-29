@@ -92,6 +92,9 @@ CREATE TABLE IF NOT EXISTS giveaway_entries (
     PRIMARY KEY (giveaway_id, user_id), FOREIGN KEY (giveaway_id) REFERENCES giveaways(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS module_settings (
+    guild_id BIGINT NOT NULL, module TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (guild_id, module)
+);
 CREATE TABLE IF NOT EXISTS temp_voices (
     owner_id BIGINT PRIMARY KEY, channel_id BIGINT NOT NULL UNIQUE, created_at TEXT NOT NULL
 );
@@ -170,7 +173,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_hourly_bucket ON activity_hourly(guild_i
 CREATE INDEX IF NOT EXISTS idx_dossier_drafts_ticket ON dossier_drafts(guild_id, ticket_id);
 CREATE INDEX IF NOT EXISTS idx_dossiers_status ON dossiers(status);
 INSERT INTO schema_migrations(version, applied_at)
-SELECT version, CURRENT_TIMESTAMP::text FROM generate_series(1, 10) AS version
+SELECT version, CURRENT_TIMESTAMP::text FROM generate_series(1, 11) AS version
 ON CONFLICT (version) DO NOTHING;
 """
 

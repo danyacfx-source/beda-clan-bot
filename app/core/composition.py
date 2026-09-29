@@ -96,6 +96,8 @@ def assemble(
         config.events_reminder_lead_minutes,
     )
     where_play = override_or(overrides, "where_play", WherePlayService, WherePlayRepository(db), bot)
+    # Настройки «Где играем» читает сам сервис, а не ког: он валидирует коды.
+    where_play.attach_module_settings(module_settings)
 
     services = Services(
         settings=settings,

@@ -349,8 +349,19 @@ class EventsCog(ClanCog, name="Events"):
         self.events = events
 
     async def cog_load(self) -> None:
-        self.reminder_loop.change_interval(seconds=self.config.events_check_interval_seconds)
+        conf = await self.module_config(self.config.guild_id, "events")
+        self.reminder_loop.change_interval(seconds=conf["check_interval_seconds"])
         self.reminder_loop.start()
+        await self._sync_lead_overrides()
+
+    async def _sync_lead_overrides(self) -> None:
+        """Запас напоминаний из панели применяется без перезапуска бота."""
+        try:
+            for guild in self.bot.guilds:
+                conf = await self.module_config(guild.id, "events")
+                self.events.set_lead_override(guild.id, conf["reminder_lead_minutes"])
+        except Exception:
+            logger.exception("Events: не удалось применить запас напоминаний")
 
     async def cog_unload(self) -> None:
         self.reminder_loop.cancel()
@@ -400,11 +411,12 @@ class EventsCog(ClanCog, name="Events"):
             await interaction.response.send_message(embed=embeds.error("Только на сервере", "Команда работает на сервере."), ephemeral=True)
             return
         recent = await self.events.recent_for_guild(interaction.guild_id, limit=100)
-        if sum(1 for row in recent if row["active"]) >= self.config.events_max_active_per_guild:
+        max_active = (await self.module_config(interaction.guild_id, "events"))["max_active_per_guild"]
+        if sum(1 for row in recent if row["active"]) >= max_active:
             await interaction.response.send_message(
                 embed=embeds.error(
                     "Слишком много ивентов",
-                    f"На сервере уже {self.config.events_max_active_per_guild} активных ивентов. "
+                    f"На сервере уже {max_active} активных ивентов. "
                     "Отмените прошедшие командой /event_cancel.",
                 ),
                 ephemeral=True,

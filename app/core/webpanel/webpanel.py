@@ -27,6 +27,7 @@ from argon2.exceptions import VerificationError
 
 from app.core import embeds
 from app.core.api_client import ApiClient
+from app.core.module_settings import MODULE_SPECS, SPEC_BY_KEY
 from app.core.ticket_content import (
     CLAN_INTRO_FOOTER,
     CLAN_INTRO_TEXT,
@@ -568,6 +569,8 @@ class WebPanel:
         if request.path in {
             "/api/settings",
             "/api/automod",
+            "/api/modules",
+            "/api/modules/reset",
             "/api/tickets/panel",
             "/api/server/members/roles",
         } or request.path.startswith(("/api/upload", "/api/webhook", "/api/bot", "/api/automod/")):
@@ -1174,6 +1177,130 @@ class WebPanel:
                 words = re.split(r"[\n,]+", words)
             await service.set_blocked_words(guild.id, list(words))
         return self._json({"ok": True})
+
+    # --- API: точечные настройки модулей ---
+
+    async def _api_modules_get(self, request: web.Request) -> web.Response:
+        """Схема модулей, их значения и списки каналов/ролей для выпадающих полей."""
+        guild = self._primary_guild()
+        if guild is None:
+            return self._json({"ok": False, "error": "Бот не подключён ни к одному серверу"}, status=400)
+        service = self.services.module_settings
+        effective = await service.all_modules(guild.id)
+        overrides = await service.overrides(guild.id)
+        modules: list[dict[str, Any]] = []
+        for spec in MODULE_SPECS:
+            values = effective.get(spec.key, {})
+            saved = overrides.get(spec.key, {})
+            defaults = service.defaults(spec.key)
+            fields = []
+            for field in spec.fields:
+                value = values.get(field.key)
+                fields.append(
+                    {
+                        "key": field.key,
+                        "label": field.label,
+                        "kind": field.kind,
+                        "hint": field.hint,
+                        "env": field.env,
+                        "min": field.minimum,
+                        "max": field.maximum,
+                        "value": value,
+                        "default": defaults.get(field.key),
+                        "overridden": field.key in saved,
+                    }
+                )
+            modules.append(
+                {
+                    "key": spec.key,
+                    "title": spec.title,
+                    "emoji": spec.emoji,
+                    "description": spec.description,
+                    "fields": fields,
+                }
+            )
+        return self._json(
+            {
+                "ok": True,
+                "guild_id": str(guild.id),
+                "guild_name": guild.name,
+                "modules": modules,
+                "channels": self._channel_options(),
+                "categories": self._category_options(),
+                "roles": self._role_options(),
+            }
+        )
+
+    async def _api_modules_post(self, request: web.Request) -> web.Response:
+        """Сохраняет значения одного модуля. Ключ ``reset`` сбрасывает всё на ``.env``."""
+        guild = self._primary_guild()
+        if guild is None:
+            return self._json({"ok": False, "error": "Бот не подключён ни к одному серверу"}, status=400)
+        payload = await self._read_json(request)
+        module = str(payload.get("module") or "")
+        if module not in SPEC_BY_KEY:
+            return self._json({"ok": False, "error": f"Неизвестный модуль: {module}"}, status=400)
+        service = self.services.module_settings
+        if payload.get("reset"):
+            await service.reset(guild.id, module)
+            await self._after_module_change(guild.id, module)
+            return self._json({"ok": True, "module": module})
+        values = payload.get("values")
+        if not isinstance(values, dict) or not values:
+            return self._json({"ok": False, "error": "Нет значений для сохранения"}, status=400)
+        try:
+            effective = await service.update(guild.id, module, values)
+        except ValueError as exc:
+            return self._json({"ok": False, "error": str(exc)}, status=400)
+        await self._after_module_change(guild.id, module)
+        return self._json({"ok": True, "module": module, "values": effective})
+
+    async def _api_modules_reset(self, request: web.Request) -> web.Response:
+        """Сбрасывает настройки модуля (или все) на значения из ``.env``."""
+        guild = self._primary_guild()
+        if guild is None:
+            return self._json({"ok": False, "error": "Бот не подключён ни к одному серверу"}, status=400)
+        payload = await self._read_json(request)
+        module = payload.get("module")
+        if module is not None and str(module) not in SPEC_BY_KEY:
+            return self._json({"ok": False, "error": f"Неизвестный модуль: {module}"}, status=400)
+        await self.services.module_settings.reset(guild.id, str(module) if module else None)
+        await self._after_module_change(guild.id, str(module) if module else None)
+        return self._json({"ok": True})
+
+    async def _after_module_change(self, guild_id: int, module: str | None) -> None:
+        """Перезапускает фоновые задачи модулей, чтобы новое значение сразу действовало."""
+        if module is None or module == "events":
+            events_cog = self.bot.get_cog("Events")
+            if events_cog is not None and hasattr(events_cog, "_sync_lead_overrides"):
+                try:
+                    await events_cog._sync_lead_overrides()
+                except Exception:
+                    logger.exception("Не удалось применить настройки напоминаний событий")
+        if module is None or module == "tempvoice":
+            tempvoice = self.bot.get_cog("TempVoice")
+            if tempvoice is not None and hasattr(tempvoice, "cleanup_loop"):
+                try:
+                    enabled = bool((await self.services.module_settings.get(guild_id, "tempvoice"))["trigger_ids"])
+                    if enabled and not tempvoice.cleanup_loop.is_running():
+                        tempvoice.cleanup_loop.start()
+                    elif not enabled and tempvoice.cleanup_loop.is_running():
+                        tempvoice.cleanup_loop.cancel()
+                except Exception:
+                    logger.exception("Не удалось применить настройки темп-голосовых")
+        if module is None or module == "ram_report":
+            ram = self.bot.get_cog("RAM")
+            if ram is not None and hasattr(ram, "ram_report_loop"):
+                try:
+                    conf = await self.services.module_settings.get(guild_id, "ram_report")
+                    if conf["channel_id"] is not None:
+                        ram.ram_report_loop.change_interval(minutes=conf["interval_minutes"])
+                        if not ram.ram_report_loop.is_running():
+                            ram.ram_report_loop.start()
+                    elif ram.ram_report_loop.is_running():
+                        ram.ram_report_loop.cancel()
+                except Exception:
+                    logger.exception("Не удалось применить настройки отчёта по памяти")
 
     # --- API: загрузка изображений для эмбедов ---
 

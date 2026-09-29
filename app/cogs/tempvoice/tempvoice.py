@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
@@ -217,22 +217,9 @@ class TempVoiceCog(ClanCog, name="TempVoice"):
         super().__init__(bot)
         self.tempvoice = tempvoice
 
-    def _legacy_config(self) -> dict[str, Any]:
-        config = self.bot.config
-        return {
-            "category_id": getattr(config, "temp_voice_category_id", None),
-            "trigger_ids": tuple(getattr(config, "temp_voice_trigger_ids", ())),
-        }
-
-    async def _tempvoice_config(self, guild_id: int | None) -> dict[str, Any]:
-        try:
-            return await self.module_config(guild_id, "tempvoice")
-        except (AttributeError, RuntimeError, TypeError):
-            return self._legacy_config()
-
     async def cog_load(self) -> None:
-        tempconf = await self._tempvoice_config(self.bot.config.guild_id)
-        if tempconf["trigger_ids"]:
+        conf = await self.module_config(self.bot.config.guild_id, "tempvoice")
+        if conf["trigger_ids"]:
             self.cleanup_loop.start()
 
     async def cog_unload(self) -> None:
@@ -288,7 +275,7 @@ class TempVoiceCog(ClanCog, name="TempVoice"):
             if owner is not None:
                 await self._remove_channel(before_channel.id)
 
-        tempconf = await self._tempvoice_config(after.guild.id if after.guild else None)
+        tempconf = await self.module_config(after.guild.id if after.guild else None, "tempvoice")
         trigger = after.channel if after.channel and after.channel.id in tempconf["trigger_ids"] else None
         if trigger is None:
             return

@@ -207,8 +207,26 @@ class EventService(BaseService["EventsRepository"]):
 
     def __init__(self, repo: EventsRepository, reminder_lead_minutes: int = 15) -> None:
         super().__init__(repo)
-        self.reminder_lead_minutes = max(1, min(180, reminder_lead_minutes))
+        self._default_lead = max(1, min(180, reminder_lead_minutes))
+        self._lead_overrides: dict[int, int] = {}
         self.flows = EventFlowStore()
+
+    @property
+    def reminder_lead_minutes(self) -> int:
+        """Запас по умолчанию из ``.env``; переопределения серверов — в ``lead_minutes_for``."""
+        return self._default_lead
+
+    @reminder_lead_minutes.setter
+    def reminder_lead_minutes(self, value: int) -> None:
+        self._default_lead = max(1, min(180, int(value)))
+
+    def lead_minutes_for(self, guild_id: int | None) -> int:
+        if guild_id is None:
+            return self._default_lead
+        return self._lead_overrides.get(guild_id, self._default_lead)
+
+    def set_lead_override(self, guild_id: int, minutes: int) -> None:
+        self._lead_overrides[guild_id] = max(1, min(180, int(minutes)))
 
     # --- создание и чтение ---
 
@@ -305,9 +323,27 @@ class EventService(BaseService["EventsRepository"]):
     # --- напоминания ---
 
     async def due_reminders(self, now: datetime | None = None) -> list[EventRow]:
+        """Ивенты, для которых пора слать напоминание.
+
+        Горизонт берётся по самому «щедрому» серверу из карты переопределений:
+        выборка шире нужного, лишнее отсекается в ``pending_reminders``.
+        """
         moment = now or datetime.now(UTC)
-        lead = moment + timedelta(minutes=self.reminder_lead_minutes)
-        return await self._repo.due_reminders(moment, lead)
+        horizon = max([self._default_lead, *self._lead_overrides.values()])
+        return await self._repo.due_reminders(moment, moment + timedelta(minutes=horizon))
+
+    def lead_for_rows(self, rows: list[EventRow]) -> int:
+        """Насколько заранее брать напоминания: серверные настройки важнее ``.env``."""
+        lead = self._default_lead
+        for row in rows:
+            candidate = self.lead_minutes_for(row.get("guild_id"))
+            if candidate > lead:
+                lead = candidate
+        return max(1, min(180, lead))
+
+    def sync_lead_overrides(self, values: dict[int, int]) -> None:
+        """Заменяет карту переопределений запасом напоминаний (вызывает веб-панель)."""
+        self._lead_overrides = {guild: max(1, min(180, int(minutes))) for guild, minutes in values.items()}
 
     async def mark_reminded(self, event_id: int, *, briefing: bool = False, start: bool = False) -> None:
         await self._repo.mark_reminded(event_id, briefing=briefing, start=start)
@@ -318,7 +354,7 @@ class EventService(BaseService["EventsRepository"]):
         pending: list[tuple[str, str, datetime]] = []
         if not event["active"]:
             return pending
-        horizon = moment + timedelta(minutes=self.reminder_lead_minutes)
+        horizon = moment + timedelta(minutes=self.lead_minutes_for(event.get("guild_id")))
         if not event["reminded_briefing"]:
             briefing = datetime.fromisoformat(event["briefing_at"])
             if moment <= briefing <= horizon:

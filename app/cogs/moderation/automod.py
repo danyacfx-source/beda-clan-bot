@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 
 from app.core.base import ClanCog
+from app.core.module_settings import defaults_for
 from app.services.settings_service import SettingsService
 
 if TYPE_CHECKING:
@@ -228,18 +229,6 @@ class AutoModCog(ClanCog, name="AutoMod"):
         ignored = set(conf["ignore_roles"])
         return bool(ignored and any(role.name in ignored for role in member.roles))
 
-    def _legacy_config(self) -> dict[str, Any]:
-        config = self.bot.config
-        return {
-            "banned_words": getattr(config, "automod_banned_words", ""),
-            "block_links": getattr(config, "automod_block_links", True),
-            "allowed_links": getattr(config, "automod_allowed_links", ""),
-            "caps_threshold": getattr(config, "automod_caps_threshold", 0.8),
-            "caps_min_len": getattr(config, "automod_caps_min_len", 12),
-            "max_messages_in_window": getattr(config, "automod_max_messages_in_window", 5),
-            "exempt_regex": getattr(config, "automod_exempt_regex", ""),
-        }
-
     def _analyze(
         self,
         user_id: int,
@@ -247,7 +236,9 @@ class AutoModCog(ClanCog, name="AutoMod"):
         blocked_words: list[str] | None,
         conf: dict[str, Any] | None = None,
     ) -> str | None:
-        conf = conf or self._legacy_config()
+        """Ищет нарушения; ``conf`` без аргументов берётся из ``.env`` (совместимость)."""
+        if conf is None:
+            conf = defaults_for("automod", self.bot.config)
         if self._is_spam(user_id, conf):
             return "спам"
         lowered = content.lower()

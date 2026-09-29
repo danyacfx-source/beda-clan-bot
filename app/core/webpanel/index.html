@@ -442,7 +442,11 @@ body[data-theme="light"]::before{opacity:.15}
             <button id="btn_save_settings" class="btn success" type="button" onclick="saveSettings()">💾 Сохранить</button>
           </div>
         </div>
-        <h3 class="sec" style="margin-top:20px">Модули — из <code>.env</code> <span class="pill-env">только чтение</span></h3>
+        <h3 class="sec" style="margin-top:20px">⚙️ Точечные настройки модулей <span class="pill-env">переопределяют .env</span></h3>
+        <div class="row-inline" style="margin:0 0 12px">
+          <button class="btn op small" type="button" onclick="loadModules()">⟳ Обновить модули</button>
+          <span class="muted small">Пустое поле = значение из <code>.env</code>. Изменения применяются сразу.</span>
+        </div>
         <div id="modules-grid" class="grid cols"></div>
       </section>
 

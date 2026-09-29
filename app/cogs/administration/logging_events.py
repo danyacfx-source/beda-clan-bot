@@ -21,13 +21,14 @@ class LoggingEventsCog(ClanCog, name="AuditLog"):
         self.logging = logging
         self._restart_logged = False
 
-    def _ignored(self, channel: discord.abc.GuildChannel | None) -> bool:
+    async def _ignored(self, channel: discord.abc.GuildChannel | None) -> bool:
         if channel is None:
             return False
-        if channel.id in self.bot.config.logs_ignore_channel_ids:
+        conf = await self.module_config(channel.guild.id, "logs")
+        if channel.id in conf["ignore_channels"]:
             return True
         category = getattr(channel, "category", None)
-        return category is not None and category.id in self.bot.config.logs_ignore_category_ids
+        return category is not None and category.id in conf["ignore_categories"]
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -44,7 +45,7 @@ class LoggingEventsCog(ClanCog, name="AuditLog"):
 
     @commands.Cog.listener()
     async def on_message_delete(self, message: discord.Message) -> None:
-        if message.author.bot or message.guild is None or self._ignored(message.channel):
+        if message.author.bot or message.guild is None or await self._ignored(message.channel):
             return
         embed = embeds.warning("Сообщение удалено", message.clean_content[:900] or "(нет текста)")
         embed.add_field(name="Автор", value=f"{message.author.mention} ({message.author.id})")
@@ -53,7 +54,7 @@ class LoggingEventsCog(ClanCog, name="AuditLog"):
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
-        if after.author.bot or after.guild is None or self._ignored(after.channel):
+        if after.author.bot or after.guild is None or await self._ignored(after.channel):
             return
         if before.content == after.content:
             return
