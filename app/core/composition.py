@@ -37,6 +37,7 @@ def assemble(
     from app.db.giveaways_repository import GiveawaysRepository
     from app.db.kv_repository import KvRepository
     from app.db.moderation_cases_repository import ModerationCasesRepository
+    from app.db.module_settings_repository import ModuleSettingsRepository
     from app.db.polls_repository import PollsRepository
     from app.db.reminders_repository import RemindersRepository
     from app.db.scheduled_repository import ScheduledRepository
@@ -53,6 +54,7 @@ def assemble(
     from app.services.logging_service import LoggingService
     from app.services.moderation_case_service import ModerationCaseService
     from app.services.moderation_service import ModerationService
+    from app.services.module_settings_service import ModuleSettingsService
     from app.services.poll_service import PollService
     from app.services.reminder_service import ReminderService
     from app.services.scheduler_service import ScheduledMessagesService
@@ -64,9 +66,11 @@ def assemble(
     # --- Репозитории (слой данных) ---
     settings_repo = override_or(overrides, "settings_repo", SettingsRepository, db)
     override_or(overrides, "kv_repo", KvRepository, db)
+    module_settings_repo = override_or(overrides, "module_settings_repo", ModuleSettingsRepository, db)
 
     # --- Сервисы, зависящие только от репозиториев ---
     settings = override_or(overrides, "settings", SettingsService, settings_repo)
+    module_settings = override_or(overrides, "module_settings", ModuleSettingsService, module_settings_repo, config)
     reminders = override_or(overrides, "reminders", ReminderService, RemindersRepository(db))
     polls = override_or(overrides, "polls", PollService, PollsRepository(db))
     giveaways = override_or(overrides, "giveaways", GiveawayService, GiveawaysRepository(db))
@@ -83,7 +87,7 @@ def assemble(
     logging_svc = override_or(overrides, "logging", LoggingService, settings, bot)
     moderation = override_or(overrides, "moderation", ModerationService, WarnsRepository(db), settings)
     cases = override_or(overrides, "cases", ModerationCaseService, ModerationCasesRepository(db))
-    tickets = override_or(overrides, "tickets", TicketService, settings, TicketsRepository(db), logging_svc)
+    tickets = override_or(overrides, "tickets", TicketService, settings, TicketsRepository(db), logging_svc, config)
     events = override_or(
         overrides,
         "events",
@@ -95,6 +99,7 @@ def assemble(
 
     services = Services(
         settings=settings,
+        module_settings=module_settings,
         moderation=moderation,
         cases=cases,
         tickets=tickets,

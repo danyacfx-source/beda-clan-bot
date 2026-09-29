@@ -24,6 +24,7 @@ from app.core.views import TicketCloseView
 from app.types import TicketRow
 
 if TYPE_CHECKING:
+    from app.config import Config
     from app.db.tickets_repository import TicketsRepository
     from app.services.logging_service import LoggingService
     from app.services.settings_service import SettingsService
@@ -50,10 +51,12 @@ class TicketService:
         settings: SettingsService,
         tickets_repo: TicketsRepository,
         logging_service: LoggingService,
+        config: Config | None = None,
     ) -> None:
         self._settings = settings
         self._repo = tickets_repo
         self._logging = logging_service
+        self._config = config
         self._delete_tasks: set[asyncio.Task[None]] = set()
 
     async def create(self, guild: discord.Guild, member: discord.Member) -> TicketCreateResult:
@@ -61,7 +64,7 @@ class TicketService:
             return TicketCreateResult(channel=None, error="У вас уже есть открытый тикет.")
 
         settings = await self._settings.get(guild.id)
-        category_id = settings.get("ticket_category_id")
+        category_id = settings.get("ticket_category_id") or (self._config.ticket_category_id if self._config else None)
         category = guild.get_channel(category_id) if category_id else None
         bot_member = guild.me
         if bot_member is None:
@@ -72,6 +75,16 @@ class TicketService:
             bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_messages=True),
             member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True),
         }
+        for role_id in self._config.ticket_support_role_ids if self._config else ():
+            role = guild.get_role(role_id)
+            if role is not None:
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True,
+                    attach_files=True,
+                    manage_messages=True,
+                )
         name = re.sub(r"[^a-z0-9-]", "-", member.name.lower()).strip("-") or "ticket"
         prefix = re.sub(r"[^a-z0-9-]", "-", (settings.get("ticket_channel_prefix") or "ticket").lower()).strip("-") or "ticket"
         try:

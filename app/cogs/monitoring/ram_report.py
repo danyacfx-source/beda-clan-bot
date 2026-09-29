@@ -64,13 +64,14 @@ class RamReportCog(ClanCog, name="RamReport"):
         super().__init__(bot)
 
     async def cog_load(self) -> None:
-        if self.bot.config.ram_report_channel_id is not None:
-            self.ram_report_loop.change_interval(minutes=self.bot.config.ram_report_interval_minutes)
+        conf = await self.module_config(self.bot.config.guild_id, "ram_report")
+        if conf["channel_id"] is not None:
+            self.ram_report_loop.change_interval(minutes=conf["interval_minutes"])
             self.ram_report_loop.start()
             logger.info(
                 "Отчёт по ОЗУ: каждые %s мин в канал %s",
-                self.bot.config.ram_report_interval_minutes,
-                self.bot.config.ram_report_channel_id,
+                conf["interval_minutes"],
+                conf["channel_id"],
             )
 
     async def cog_unload(self) -> None:
@@ -78,7 +79,8 @@ class RamReportCog(ClanCog, name="RamReport"):
 
     @tasks.loop(minutes=30)
     async def ram_report_loop(self) -> None:
-        channel_id = self.bot.config.ram_report_channel_id
+        conf = await self.module_config(self.bot.config.guild_id, "ram_report")
+        channel_id = conf["channel_id"]
         if not channel_id:
             return
         channel = self.bot.get_channel(channel_id)
@@ -90,8 +92,8 @@ class RamReportCog(ClanCog, name="RamReport"):
         embed = embeds.neutral("Монитор памяти", "Автоматическая диагностика процесса бота «BEDA».")
         embed.add_field(name="СЕЙЧАС", value=f"`{current:.1f} MB`", inline=True)
         embed.add_field(name="ПИК", value=f"`{peak:.1f} MB`", inline=True)
-        embed.add_field(name="ИНТЕРВАЛ", value=f"`{self.bot.config.ram_report_interval_minutes} min`", inline=True)
-        if self.bot.config.ram_report_tracemalloc:
+        embed.add_field(name="ИНТЕРВАЛ", value=f"`{conf['interval_minutes']} min`", inline=True)
+        if conf["tracemalloc"]:
             report = _fit_report(build_tracemalloc_report())
             if report:
                 embed.add_field(name="📊 Отчёт о памяти (tracemalloc)", value=report, inline=False)

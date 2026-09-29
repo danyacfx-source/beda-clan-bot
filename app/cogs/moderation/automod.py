@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord.ext import commands
@@ -103,7 +103,8 @@ class AutoModCog(ClanCog, name="AutoMod"):
                 old.append((channel, current))
             except discord.HTTPException:
                 logger.debug("Automod: не удалось закрыть %s", channel, exc_info=True)
-        duration = max(30, seconds or self.bot.config.automod_lockdown_seconds)
+        conf = await self.module_config(guild.id, "automod")
+        duration = max(30, seconds or conf["lockdown_seconds"])
         prior = self._lockdown_tasks.pop(guild.id, None)
         if prior is not None:
             prior.cancel()
@@ -123,12 +124,12 @@ class AutoModCog(ClanCog, name="AutoMod"):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        config = self.bot.config
         if member.bot or member.guild is None:
             return
-        if config.automod_min_account_age_days > 0:
+        conf = await self.module_config(member.guild.id, "automod")
+        if conf["min_account_age_days"] > 0:
             created = member.created_at
-            if datetime.now(UTC) - created < timedelta(days=config.automod_min_account_age_days):
+            if datetime.now(UTC) - created < timedelta(days=conf["min_account_age_days"]):
                 me = member.guild.me
                 if me is not None and me.guild_permissions.kick_members:
                     try:
@@ -137,18 +138,18 @@ class AutoModCog(ClanCog, name="AutoMod"):
                     except discord.HTTPException:
                         logger.warning("Automod: не удалось удалить новый аккаунт %s", member, exc_info=True)
                 return
-        if not config.automod_antiraid_enabled:
+        if not conf["antiraid_enabled"]:
             return
         now = time.monotonic()
         joins = self._joins.setdefault(member.guild.id, [])
-        window = config.automod_antiraid_window_seconds
+        window = conf["antiraid_window_seconds"]
         joins[:] = [stamp for stamp in joins if now - stamp <= window]
         joins.append(now)
-        if len(joins) >= config.automod_antiraid_join_threshold:
+        if len(joins) >= conf["antiraid_join_threshold"]:
             await self._activate_raid_mode(member.guild)
 
     async def _activate_raid_mode(self, guild: discord.Guild) -> None:
-        config = self.bot.config
+        conf = await self.module_config(guild.id, "automod")
         now = time.monotonic()
         if self._raid_until.get(guild.id, 0.0) > now:
             return
@@ -156,13 +157,13 @@ class AutoModCog(ClanCog, name="AutoMod"):
         if me is None or not me.guild_permissions.manage_channels:
             logger.warning("Automod: anti-raid сработал, но нет manage_channels в %s", guild)
             return
-        self._raid_until[guild.id] = now + config.automod_antiraid_cooldown_seconds
+        self._raid_until[guild.id] = now + conf["antiraid_cooldown_seconds"]
         changed: list[tuple[discord.TextChannel, int]] = []
         for channel in guild.text_channels:
-            if channel.id in set(config.automod_ignored_channels):
+            if channel.id in set(conf["ignored_channels"]):
                 continue
             previous = channel.slowmode_delay
-            target = max(previous, config.automod_antiraid_slowmode_seconds)
+            target = max(previous, conf["antiraid_slowmode_seconds"])
             if target == previous:
                 continue
             try:
@@ -173,7 +174,7 @@ class AutoModCog(ClanCog, name="AutoMod"):
         logger.warning("Automod: anti-raid режим включён на сервере %s (%d каналов)", guild, len(changed))
 
         async def restore() -> None:
-            await asyncio.sleep(config.automod_antiraid_cooldown_seconds)
+            await asyncio.sleep(conf["antiraid_cooldown_seconds"])
             for channel, previous in changed:
                 try:
                     await channel.edit(slowmode_delay=previous, reason="Automod: anti-raid завершён")
@@ -196,22 +197,22 @@ class AutoModCog(ClanCog, name="AutoMod"):
         if not settings.get("automod_enabled", True):
             return
 
+        conf = await self.module_config(message.guild.id, "automod")
         member = message.author
         if isinstance(member, discord.User):
             member = message.guild.get_member(member.id)
         if member is None or not isinstance(member, discord.Member):
             return
-        if self._has_ignored_role(member):
+        if self._has_ignored_role(member, conf):
             return
         if member.guild_permissions.manage_messages:
             return
-        config = self.bot.config
-        if message.channel.id in set(config.automod_ignored_channels):
+        if message.channel.id in set(conf["ignored_channels"]):
             return
 
         self._track_spam(member.id)
         blocked_words = await self.settings.blocked_words(message.guild.id)
-        reason = self._analyze(member.id, message.content or "", blocked_words)
+        reason = self._analyze(member.id, message.content or "", blocked_words, conf)
         if not reason:
             return
 
@@ -219,19 +220,38 @@ class AutoModCog(ClanCog, name="AutoMod"):
             await message.delete()
         except discord.HTTPException:
             pass
-        await self._punish(member, reason)
+        await self._punish(member, reason, conf)
         channel_name = getattr(message.channel, "name", message.channel.id)
         logger.warning("Automod: %s в #%s: %s", message.author, channel_name, reason)
 
-    def _has_ignored_role(self, member: discord.Member) -> bool:
-        ignored = set(self.bot.config.automod_ignore_roles)
+    def _has_ignored_role(self, member: discord.Member, conf: dict[str, Any]) -> bool:
+        ignored = set(conf["ignore_roles"])
         return bool(ignored and any(role.name in ignored for role in member.roles))
 
-    def _analyze(self, user_id: int, content: str, blocked_words: list[str] | None = None) -> str | None:
-        if self._is_spam(user_id):
+    def _legacy_config(self) -> dict[str, Any]:
+        config = self.bot.config
+        return {
+            "banned_words": getattr(config, "automod_banned_words", ""),
+            "block_links": getattr(config, "automod_block_links", True),
+            "allowed_links": getattr(config, "automod_allowed_links", ""),
+            "caps_threshold": getattr(config, "automod_caps_threshold", 0.8),
+            "caps_min_len": getattr(config, "automod_caps_min_len", 12),
+            "max_messages_in_window": getattr(config, "automod_max_messages_in_window", 5),
+            "exempt_regex": getattr(config, "automod_exempt_regex", ""),
+        }
+
+    def _analyze(
+        self,
+        user_id: int,
+        content: str,
+        blocked_words: list[str] | None,
+        conf: dict[str, Any] | None = None,
+    ) -> str | None:
+        conf = conf or self._legacy_config()
+        if self._is_spam(user_id, conf):
             return "спам"
         lowered = content.lower()
-        exempt = getattr(self.bot.config, "automod_exempt_regex", "")
+        exempt = conf["exempt_regex"]
         if exempt:
             try:
                 if re.search(exempt, content, flags=re.IGNORECASE):
@@ -240,7 +260,7 @@ class AutoModCog(ClanCog, name="AutoMod"):
                 logger.error("Некорректный AUTOMOD_EXEMPT_REGEX", exc_info=True)
 
         banned: set[str] = {w.strip() for w in (blocked_words or []) if w and w.strip()}
-        for raw in (self.bot.config.automod_banned_words or "").split(","):
+        for raw in (conf["banned_words"] or "").split(","):
             word = raw.strip()
             if word:
                 banned.add(word)
@@ -248,13 +268,12 @@ class AutoModCog(ClanCog, name="AutoMod"):
             if word and word in lowered:
                 return f"запрещённое слово: «{word}»"
 
-        config = self.bot.config
-        if config.automod_block_links:
-            allowed = _normalized_allowed_links(config.automod_allowed_links)
+        if conf["block_links"]:
+            allowed = _normalized_allowed_links(conf["allowed_links"])
             host = _blocked_link_host(lowered, allowed)
             if host:
                 return f"ссылка на неразрешённый домен: {host}"
-        if _is_caps(content, config.automod_caps_threshold, config.automod_caps_min_len):
+        if _is_caps(content, conf["caps_threshold"], conf["caps_min_len"]):
             return "капс"
         if _is_stretched(content):
             return "растянутый спам"
@@ -269,8 +288,8 @@ class AutoModCog(ClanCog, name="AutoMod"):
         while len(stamps) > 20:
             stamps.pop(0)
 
-    def _is_spam(self, user_id: int) -> bool:
-        max_in_window = self.bot.config.automod_max_messages_in_window
+    def _is_spam(self, user_id: int, conf: dict[str, Any]) -> bool:
+        max_in_window = conf["max_messages_in_window"]
         if max_in_window <= 0:
             return False
         stamps = self._messages.get(user_id, [])
@@ -278,19 +297,18 @@ class AutoModCog(ClanCog, name="AutoMod"):
         recent = [stamp for stamp in stamps if now - stamp <= _SPAM_WINDOW]
         return len(stamps) > max_in_window or len(recent) > max_in_window
 
-    async def _punish(self, member: discord.Member, reason: str) -> None:
-        config = self.bot.config
-        duration = config.automod_timeout_seconds
+    async def _punish(self, member: discord.Member, reason: str, conf: dict[str, Any]) -> None:
+        duration = conf["timeout_seconds"]
         if duration > 0:
             try:
                 await member.timeout(discord.utils.utcnow() + timedelta(seconds=duration), reason=f"Automod: {reason}")
             except discord.HTTPException:
                 pass
 
-        ban_after = config.automod_ban_after_timeouts
+        ban_after = conf["ban_after_timeouts"]
         if ban_after > 0:
             now = time.monotonic()
-            window = config.automod_ban_window_seconds
+            window = conf["ban_window_seconds"]
             stamps = self._timeout_counts.setdefault(member.id, [])
             while stamps and now - stamps[0] > window:
                 stamps.pop(0)

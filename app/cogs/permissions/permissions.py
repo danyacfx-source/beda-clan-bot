@@ -71,9 +71,6 @@ class PermissionsCog(ClanCog, name="Permissions"):
         super().__init__(bot)
         self._started = False
 
-    def _categories(self) -> dict[str, dict[str, Any]]:
-        return _parse_categories(self.bot.config.permissions_categories)
-
     @discord.app_commands.command(name="apply_permissions", description="Применить права категорий из конфига")
     @discord.app_commands.default_permissions(manage_guild=True)
     @discord.app_commands.guild_only()
@@ -85,7 +82,7 @@ class PermissionsCog(ClanCog, name="Permissions"):
     @discord.app_commands.command(name="roles_required", description="Показать настройки прав категорий")
     @discord.app_commands.guild_only()
     async def roles_required(self, interaction: discord.Interaction) -> None:
-        categories = self._categories()
+        categories = _parse_categories((await self.module_config(interaction.guild_id, "permissions"))["categories"])
         if not categories:
             await interaction.response.send_message("Права категорий из конфига не заданы.", ephemeral=True)
             return
@@ -100,10 +97,11 @@ class PermissionsCog(ClanCog, name="Permissions"):
         if self._started:
             return
         self._started = True
-        if not self.bot.config.permissions_auto_apply or not self._categories():
-            return
         guild_id = self.bot.config.guild_id
         if guild_id is None:
+            return
+        conf = await self.module_config(guild_id, "permissions")
+        if not conf["auto_apply"] or not _parse_categories(conf["categories"]):
             return
         guild = self.bot.get_guild(guild_id)
         if guild is None:
@@ -113,7 +111,8 @@ class PermissionsCog(ClanCog, name="Permissions"):
 
     async def _apply_all(self, guild: discord.Guild) -> list[str]:
         lines: list[str] = []
-        for cat_id, spec in self._categories().items():
+        conf = await self.module_config(guild.id, "permissions")
+        for cat_id, spec in _parse_categories(conf["categories"]).items():
             lines.append(await self._apply_category(guild, cat_id, spec))
         return lines
 

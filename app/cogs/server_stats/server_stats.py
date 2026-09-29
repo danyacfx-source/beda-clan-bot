@@ -51,8 +51,9 @@ class ServerStatsCog(ClanCog, name="ServerStats"):
     _RENAME_MIN_INTERVAL = 360.0
 
     async def cog_load(self) -> None:
-        if self.bot.config.server_stats_enabled:
-            self.update_loop.change_interval(seconds=self.bot.config.server_stats_update_seconds)
+        conf = await self.module_config(self.bot.config.guild_id, "server_stats")
+        if conf["enabled"]:
+            self.update_loop.change_interval(seconds=conf["update_seconds"])
             self.update_loop.start()
 
     async def cog_unload(self) -> None:
@@ -71,16 +72,16 @@ class ServerStatsCog(ClanCog, name="ServerStats"):
         await self.bot.wait_until_ready()
 
     async def _update_guild(self, guild: discord.Guild) -> None:
-        config = self.bot.config
-        channels_cfg = _parse_channels(config.server_stats_channels)
+        conf = await self.module_config(guild.id, "server_stats")
+        channels_cfg = _parse_channels(conf["channels"])
         if not channels_cfg:
             return
-        category = guild.get_channel(config.server_stats_category_id) if config.server_stats_category_id else None
+        category = guild.get_channel(conf["category_id"]) if conf["category_id"] else None
         if not isinstance(category, discord.CategoryChannel):
-            category = discord.utils.get(guild.categories, name=config.server_stats_category_name)
+            category = discord.utils.get(guild.categories, name=conf["category_name"])
             if category is None:
                 try:
-                    category = await guild.create_category(config.server_stats_category_name, reason="Счётчики сервера")
+                    category = await guild.create_category(conf["category_name"], reason="Счётчики сервера")
                 except discord.HTTPException:
                     logger.warning("ServerStats: нет прав создать категорию в %s", guild.name)
                     return

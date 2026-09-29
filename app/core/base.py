@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from discord.ext import commands
 
@@ -37,6 +37,14 @@ class ClanCog(commands.Cog):
     @property
     def config(self):
         return self.bot.config
+
+    async def module_config(self, guild_id: int | None, module: str) -> dict[str, Any]:
+        """Эффективные настройки модуля: переопределение из панели, иначе ``.env``.
+
+        Коги читают настройки только так — тогда значение, заданное в панели,
+        сразу же действует и не требует перезапуска.
+        """
+        return await self.services.module_settings.get(guild_id or 0, module)
 
 
 RepoT = TypeVar("RepoT", bound="BaseRepository")

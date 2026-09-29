@@ -64,6 +64,10 @@ class Config:
     temp_voice_trigger_ids: tuple[int, ...] = ()
     temp_voice_category_id: int | None = None
 
+    # Тикеты
+    ticket_category_id: int | None = None
+    ticket_support_role_ids: tuple[int, ...] = ()
+
     # Ивенты (сборы): мастер в ЛС, RSVP и напоминания
     events_reminder_lead_minutes: int = 15
     events_check_interval_seconds: int = 60
@@ -172,6 +176,8 @@ class Config:
             rules_role_id=_single_int(os.getenv("RULES_ROLE_ID")),
             temp_voice_trigger_ids=_ints(os.getenv("TEMP_VOICE_TRIGGER_IDS")),
             temp_voice_category_id=_single_int(os.getenv("TEMP_VOICE_CATEGORY_ID")),
+            ticket_category_id=_single_int(os.getenv("TICKET_CATEGORY_ID")),
+            ticket_support_role_ids=_ints(os.getenv("TICKET_SUPPORT_ROLE_IDS")),
             events_reminder_lead_minutes=max(1, min(180, int(os.getenv("EVENTS_REMINDER_LEAD_MINUTES", "15")))),
             events_check_interval_seconds=max(15, int(os.getenv("EVENTS_CHECK_INTERVAL_SECONDS", "60"))),
             events_max_active_per_guild=max(1, min(200, int(os.getenv("EVENTS_MAX_ACTIVE_PER_GUILD", "25")))),

@@ -23,22 +23,26 @@ class RulesGateCog(ClanCog, name="RulesGate"):
         super().__init__(bot)
 
     async def cog_load(self) -> None:
-        if self.bot.config.rules_message_id and self.bot.config.rules_role_id:
+        conf = await self.module_config(self.bot.config.guild_id, "rules_gate")
+        if conf["message_id"] and conf["role_id"]:
             self.bot.loop.create_task(self._prepare_gate())
 
     async def _prepare_gate(self) -> None:
-        config = self.bot.config
         await self.bot.wait_until_ready()
         for guild in self.bot.guilds:
+            conf = await self.module_config(guild.id, "rules_gate")
+            message_id, role_id = conf["message_id"], conf["role_id"]
+            if not (message_id and role_id):
+                continue
             for channel in guild.text_channels:
                 try:
-                    message = await channel.fetch_message(config.rules_message_id)
+                    message = await channel.fetch_message(message_id)
                 except discord.HTTPException:
                     continue
-                if message is not None and config.rules_role_id:
-                    role = guild.get_role(config.rules_role_id)
+                if message is not None:
+                    role = guild.get_role(role_id)
                     if role is None:
-                        continue
+                        return
                     reaction = discord.utils.get(message.reactions, emoji=_TICK)
                     if reaction is None:
                         await message.add_reaction(_TICK)
@@ -47,7 +51,7 @@ class RulesGateCog(ClanCog, name="RulesGate"):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        role = self._role_for(payload)
+        role = await self._role_for(payload)
         if role is None:
             return
         member = self._member(payload)
@@ -60,7 +64,7 @@ class RulesGateCog(ClanCog, name="RulesGate"):
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        role = self._role_for(payload)
+        role = await self._role_for(payload)
         if role is None:
             return
         member = self._member(payload)
@@ -71,15 +75,16 @@ class RulesGateCog(ClanCog, name="RulesGate"):
         except discord.HTTPException:
             logger.exception("RulesGate: не удалось снять роль %s", member.id)
 
-    def _role_for(self, payload: discord.RawReactionActionEvent) -> discord.Role | None:
-        config = self.bot.config
-        emoji_name = getattr(payload.emoji, "name", str(payload.emoji))
-        if emoji_name != _TICK or payload.message_id != config.rules_message_id or not config.rules_role_id:
-            return None
+    async def _role_for(self, payload: discord.RawReactionActionEvent) -> discord.Role | None:
         guild = self.bot.get_guild(payload.guild_id)
         if guild is None:
             return None
-        return guild.get_role(config.rules_role_id)
+        conf = await self.module_config(payload.guild_id, "rules_gate")
+        emoji_name = getattr(payload.emoji, "name", str(payload.emoji))
+        message_id, role_id = conf["message_id"], conf["role_id"]
+        if emoji_name != _TICK or not message_id or not role_id or payload.message_id != message_id:
+            return None
+        return guild.get_role(role_id)
 
     def _member(self, payload: discord.RawReactionActionEvent) -> discord.Member | None:
         if payload.guild_id is None:

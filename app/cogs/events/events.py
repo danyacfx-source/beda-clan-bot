@@ -372,7 +372,10 @@ class EventsCog(ClanCog, name="Events"):
 
     @reminder_loop.before_loop
     async def before_reminder(self) -> None:
-        await self.bot.wait_until_ready()
+        try:
+            await self.bot.wait_until_ready()
+        except RuntimeError:
+            self.reminder_loop.cancel()
 
     async def _notify(self, event: EventRow) -> None:
         channel = self.bot.get_channel(int(event["channel_id"]))

@@ -33,7 +33,8 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
         self._task: asyncio.Task[None] | None = None
 
     async def cog_load(self) -> None:
-        if self.bot.config.birthday_channel_id is not None and self._task is None:
+        conf = await self.module_config(self.bot.config.guild_id, "birthdays")
+        if conf["channel_id"] is not None and self._task is None:
             self._task = self.bot.loop.create_task(self._loop())
 
     async def cog_unload(self) -> None:
@@ -43,8 +44,9 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
 
     async def _loop(self) -> None:
         await self.bot.wait_until_ready()
-        hour = self.bot.config.birthday_announce_hour
         while True:
+            # Час читаем каждый круг: смена настройки в панели подхватывается без рестарта.
+            hour = (await self.module_config(self.bot.config.guild_id, "birthdays"))["announce_hour"]
             now = datetime.now()
             target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
             if now >= target:
@@ -58,7 +60,8 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
                 logger.exception("Birthdays: ошибка анонса")
 
     async def _announce(self) -> None:
-        channel_id = self.bot.config.birthday_channel_id
+        conf = await self.module_config(self.bot.config.guild_id, "birthdays")
+        channel_id = conf["channel_id"]
         if channel_id is None:
             return
         channel = self.bot.get_channel(channel_id)
@@ -83,7 +86,7 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
             footer=f"BEDA  •  именинников сегодня: {len(lines)}",
         )
         content = None
-        role_id = self.bot.config.birthday_ping_role_id
+        role_id = conf["ping_role_id"]
         if role_id is not None and guild.get_role(role_id) is not None:
             content = f"<@&{role_id}>"
         try:

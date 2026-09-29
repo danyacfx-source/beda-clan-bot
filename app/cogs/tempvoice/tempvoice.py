@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
@@ -217,8 +217,22 @@ class TempVoiceCog(ClanCog, name="TempVoice"):
         super().__init__(bot)
         self.tempvoice = tempvoice
 
+    def _legacy_config(self) -> dict[str, Any]:
+        config = self.bot.config
+        return {
+            "category_id": getattr(config, "temp_voice_category_id", None),
+            "trigger_ids": tuple(getattr(config, "temp_voice_trigger_ids", ())),
+        }
+
+    async def _tempvoice_config(self, guild_id: int | None) -> dict[str, Any]:
+        try:
+            return await self.module_config(guild_id, "tempvoice")
+        except (AttributeError, RuntimeError, TypeError):
+            return self._legacy_config()
+
     async def cog_load(self) -> None:
-        if self.bot.config.temp_voice_trigger_ids:
+        tempconf = await self._tempvoice_config(self.bot.config.guild_id)
+        if tempconf["trigger_ids"]:
             self.cleanup_loop.start()
 
     async def cog_unload(self) -> None:
@@ -274,7 +288,8 @@ class TempVoiceCog(ClanCog, name="TempVoice"):
             if owner is not None:
                 await self._remove_channel(before_channel.id)
 
-        trigger = after.channel if after.channel and after.channel.id in self.bot.config.temp_voice_trigger_ids else None
+        tempconf = await self._tempvoice_config(after.guild.id if after.guild else None)
+        trigger = after.channel if after.channel and after.channel.id in tempconf["trigger_ids"] else None
         if trigger is None:
             return
         existing_id = await self.tempvoice.channel_of_owner(member.id)
@@ -287,7 +302,7 @@ class TempVoiceCog(ClanCog, name="TempVoice"):
                     logger.debug("TempVoice: не удалось переместить в существующий канал", exc_info=True)
                 return
         try:
-            category = self.bot.get_channel(self.bot.config.temp_voice_category_id) if self.bot.config.temp_voice_category_id else None
+            category = self.bot.get_channel(tempconf["category_id"]) if tempconf["category_id"] else None
             if category is None or not isinstance(category, discord.CategoryChannel):
                 category = trigger.category
             channel = await trigger.guild.create_voice_channel(

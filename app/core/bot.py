@@ -97,65 +97,22 @@ class ClanBot(commands.Bot):
         if self.user is None or self.application_id is None:
             logger.debug("Синк команд: application_id ещё не известен — пропуск")
             return
-        # Команды регистрируются глобально, поэтому синкаем только глобальный
-        # список. Гильдейский sync() берёт только явно гильдейские команды
-        # (CommandTree._get_all_commands) — у нас их нет, и такой вызов ушёл бы
-        # с пустым списком, стерев все команды сервера.
+        guild_id = self.config.guild_id
+        sync_guild = discord.Object(id=guild_id) if guild_id is not None else None
         try:
-            synced = await self.tree.sync()
+            if sync_guild is not None:
+                self.tree.copy_global_to(guild=sync_guild)
+            synced = await self.tree.sync(guild=sync_guild)
         except (discord.HTTPException, discord.MissingApplicationID, discord.ConnectionClosed) as exc:
             logger.warning("Не удалось синхронизировать команды: %s", exc)
             return
-        try:
-            names = [command.name for command in await self.tree.fetch_commands() if getattr(command, "name", None)]
-        except discord.HTTPException:
-            names = []
-        logger.info("Синхронизировано команд: %d (%s)", len(synced or []), ", ".join(names[:20]))
+        scope = f"гильдия {guild_id}" if guild_id is not None else "глобально"
+        logger.info("Синхронизировано команд (%s): %d", scope, len(synced or []))
 
     async def on_ready(self) -> None:
-        await self._sync_commands_to_guild()
-
-    async def _sync_commands_to_guild(self) -> None:
-        """Копирует глобальные команды в гильдию, чтобы они были видны сразу.
-
-        Глобальная публикация применяется до часа: Discord раскладывает её по
-        своим шардам. Копия в гильдию применяется мгновенно, поэтому команды
-        появляются в списке сразу после рестарта. Глобальный список при этом
-        сохраняется — бот продолжает работать и на других серверах.
-
-        Вызывается из ``on_ready``, а не из ``setup_hook``: ``setup_hook``
-        выполняется внутри ``login()`` до подключения к шлюзу, когда гильдий
-        ещё нет в кэше. А ``CommandTree.copy_global_to`` требует объект
-        ``Snowflake`` (внутри обращается к ``guild.id``), а не его id.
-        """
-        guild_id = self.config.guild_id
-        if guild_id is None or self._guild_commands_synced:
-            return
-        guild = self.get_guild(guild_id)
-        if guild is None:
-            logger.warning("Гильдия %s недоступна: быстрые команды не скопированы", guild_id)
-            return
-        try:
-            # copy_global_to и sync в discord.py 2.5.2 ждут Snowflake
-            # (внутри обращаются к guild.id), поэтому передаём объект Guild.
-            self.tree.copy_global_to(guild=guild)
-            guild_synced = await self.tree.sync(guild=guild)
-        except discord.Forbidden:
-            logger.error(
-                "Нет прав на команды в гильдии %s: проверьте, что бот в ней состоит "
-                "и у него есть право Manage Guild / Integrations",
-                guild_id,
-            )
-            return
-        except (discord.HTTPException, discord.MissingApplicationID, discord.ConnectionClosed) as exc:
-            logger.warning("Не удалось скопировать команды в гильдию %s: %s", guild_id, exc)
-            return
-        self._guild_commands_synced = True
-        logger.info(
-            "Команды скопированы в гильдию %s: %d (доступны сразу, без ожидания глобальной публикации)",
-            guild_id,
-            len(guild_synced or []),
-        )
+        if self.config.guild_id is None and not self._guild_commands_synced:
+            await self._sync_commands()
+            self._guild_commands_synced = True
 
     async def close(self) -> None:
         webpanel = self.webpanel

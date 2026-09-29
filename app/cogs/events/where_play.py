@@ -52,7 +52,10 @@ class WherePlayCog(ClanCog, name="WherePlay"):
 
     @poll_loop.before_loop
     async def before_poll(self) -> None:
-        await self.bot.wait_until_ready()
+        try:
+            await self.bot.wait_until_ready()
+        except RuntimeError:
+            self.poll_loop.cancel()
 
     # --- команды ---
 

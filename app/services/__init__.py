@@ -21,6 +21,7 @@ from app.services.giveaway_service import GiveawayService
 from app.services.logging_service import LoggingService
 from app.services.moderation_case_service import ModerationCaseService
 from app.services.moderation_service import ModerationService
+from app.services.module_settings_service import ModuleSettingsService
 from app.services.poll_service import PollService
 from app.services.reminder_service import ReminderService
 from app.services.scheduler_service import ScheduledMessagesService
@@ -33,6 +34,8 @@ from app.services.where_play_service import WherePlayService
 @dataclass(slots=True)
 class Services:
     settings: SettingsService
+    #: Точечные настройки модулей: БД поверх .env. См. app/core/module_settings.py
+    module_settings: ModuleSettingsService
     moderation: ModerationService
     cases: ModerationCaseService
     tickets: TicketService
