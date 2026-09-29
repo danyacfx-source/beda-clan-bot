@@ -14,17 +14,21 @@ class _FakeTree:
         self.copied_to: list[int] = []
 
     async def sync(self, *, guild=None):
+        # Как в discord.py 2.5.2: sync тоже ждёт Snowflake, а не int.
+        if guild is not None and not hasattr(guild, "id"):
+            raise TypeError("sync() ждёт объект Snowflake, а не идентификатор")
         self.synced_with.append(guild)
         return []
 
     async def fetch_commands(self):
         return []
 
-    async def copy_global_to(self, *, guild):
-        # Сигнатура повторяет discord.py: аргумент только keyword.
-        if not isinstance(guild, int):
-            raise TypeError("copy_global_to() принимает только keyword-аргумент guild")
-        self.copied_to.append(guild)
+    def copy_global_to(self, *, guild):
+        # Как в discord.py 2.5.2: синхронный метод, принимает Snowflake.
+        # Возвращает None, поэтому случайный await здесь сразу падает.
+        if not hasattr(guild, "id"):
+            raise TypeError("copy_global_to() ждёт объект Snowflake, а не идентификатор")
+        self.copied_to.append(guild.id)
         return None
 
 
@@ -66,29 +70,48 @@ def _bot(tree: _FakeTree | None = None, guild_id: int | None = 65394945663015321
 async def test_синк_идёт_только_в_глобальный_список():
     """Гильдейский sync отправил бы пустой список и стёр бы команды сервера."""
     tree = _FakeTree()
-    bot = _bot(tree)
-    bot.get_guild = lambda _guild_id: None
-    await bot._sync_commands()
-    assert tree.synced_with == [None]
-    assert tree.copied_to == []
-
-
-async def test_без_guild_id_быстрые_команды_не_копируются():
-    tree = _FakeTree()
     bot = _bot(tree, guild_id=None)
     await bot._sync_commands()
     assert tree.synced_with == [None]
     assert tree.copied_to == []
 
 
+class _FakeGuild:
+    def __init__(self, guild_id: int) -> None:
+        self.id = guild_id
+
+
 async def test_глобальные_команды_копируются_в_гильдию():
-    """Гильдейская копия применяется мгновенно, глобальная — до часа."""
+    """Гильдейская копия применяется мгновенно, глобальная — до часа.
+
+    Копирование живёт в on_ready, а не в setup_hook: setup_hook выполняется
+    внутри login() до подключения к шлюзу, когда гильдий в кэше ещё нет.
+    """
     tree = _FakeTree()
     bot = _bot(tree)
-    bot.get_guild = lambda _guild_id: object()
-    await bot._sync_commands()
-    assert tree.synced_with == [None, 653949456630153216]
-    assert tree.copied_to == [653949456630153216]
+    guild = _FakeGuild(653949456630153216)
+    bot.get_guild = lambda guild_id: guild if guild_id == guild.id else None
+    await bot.on_ready()
+    assert tree.copied_to == [guild.id]
+    assert tree.synced_with == [guild]
+
+
+async def test_копирование_в_гильдию_не_повторяется_при_reconnect():
+    tree = _FakeTree()
+    bot = _bot(tree)
+    guild = _FakeGuild(653949456630153216)
+    bot.get_guild = lambda _guild_id: guild
+    await bot.on_ready()
+    await bot.on_ready()
+    assert tree.copied_to == [guild.id]
+
+
+async def test_без_гильдии_в_кэше_копирование_пропускается():
+    tree = _FakeTree()
+    bot = _bot(tree)
+    bot.get_guild = lambda _guild_id: None
+    await bot.on_ready()
+    assert tree.copied_to == []
 
 
 async def test_до_логина_синк_пропускается():

@@ -49,6 +49,7 @@ class ClanBot(commands.Bot):
         self.root = None
         self.webpanel = None
         self.db_backups = None
+        self._guild_commands_synced = False
         self.start_time = datetime.now(UTC)
         self.tree.on_error = self.on_app_command_error
 
@@ -110,6 +111,8 @@ class ClanBot(commands.Bot):
         except discord.HTTPException:
             names = []
         logger.info("Синхронизировано команд: %d (%s)", len(synced or []), ", ".join(names[:20]))
+
+    async def on_ready(self) -> None:
         await self._sync_commands_to_guild()
 
     async def _sync_commands_to_guild(self) -> None:
@@ -119,20 +122,35 @@ class ClanBot(commands.Bot):
         своим шардам. Копия в гильдию применяется мгновенно, поэтому команды
         появляются в списке сразу после рестарта. Глобальный список при этом
         сохраняется — бот продолжает работать и на других серверах.
+
+        Вызывается из ``on_ready``, а не из ``setup_hook``: ``setup_hook``
+        выполняется внутри ``login()`` до подключения к шлюзу, когда гильдий
+        ещё нет в кэше. А ``CommandTree.copy_global_to`` требует объект
+        ``Snowflake`` (внутри обращается к ``guild.id``), а не его id.
         """
         guild_id = self.config.guild_id
-        if guild_id is None:
-            logger.info("GUILD_ID не задан: команды появятся после глобальной публикации")
+        if guild_id is None or self._guild_commands_synced:
             return
-        if self.get_guild(guild_id) is None:
+        guild = self.get_guild(guild_id)
+        if guild is None:
             logger.warning("Гильдия %s недоступна: быстрые команды не скопированы", guild_id)
             return
         try:
-            await self.tree.copy_global_to(guild=guild_id)
-            guild_synced = await self.tree.sync(guild=guild_id)
+            # copy_global_to и sync в discord.py 2.5.2 ждут Snowflake
+            # (внутри обращаются к guild.id), поэтому передаём объект Guild.
+            self.tree.copy_global_to(guild=guild)
+            guild_synced = await self.tree.sync(guild=guild)
+        except discord.Forbidden:
+            logger.error(
+                "Нет прав на команды в гильдии %s: проверьте, что бот в ней состоит "
+                "и у него есть право Manage Guild / Integrations",
+                guild_id,
+            )
+            return
         except (discord.HTTPException, discord.MissingApplicationID, discord.ConnectionClosed) as exc:
             logger.warning("Не удалось скопировать команды в гильдию %s: %s", guild_id, exc)
             return
+        self._guild_commands_synced = True
         logger.info(
             "Команды скопированы в гильдию %s: %d (доступны сразу, без ожидания глобальной публикации)",
             guild_id,
