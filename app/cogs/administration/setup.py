@@ -16,8 +16,6 @@ from app.services.settings_service import SettingsService
 if TYPE_CHECKING:
     from app.core.bot import ClanBot
 
-setup_group = app_commands.Group(name="setup", description="Настройка сервера")
-
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 _LOG_COLUMNS = {
@@ -72,17 +70,21 @@ _PERM_NAMES = {
 
 
 class SetupCog(ClanCog, name="Setup"):
+    # Группа обязана быть атрибутом класса кога: объявленная на уровне модуля
+    # она не попадает в дерево команд, и все подкоманды молча теряются.
+    setup = app_commands.Group(name="setup", description="Настройка сервера")
+
     def __init__(self, bot: ClanBot, settings: SettingsService) -> None:
         super().__init__(bot)
         self.settings = settings
 
-    @setup_group.command(name="log-channel", description="Канал для логов событий и модерации")
+    @setup.command(name="log-channel", description="Канал для логов событий и модерации")
     @app_commands.guild_only()
     async def log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         await self.settings.update(interaction.guild.id, log_channel_id=channel.id)
         await interaction.response.send_message(embed=embeds.success("Настройка", f"Логи → {channel.mention}"))
 
-    @setup_group.command(name="log-type", description="Отдельный канал для конкретного типа логов")
+    @setup.command(name="log-type", description="Отдельный канал для конкретного типа логов")
     @app_commands.guild_only()
     @app_commands.choices(
         kind=[
@@ -103,13 +105,13 @@ class SetupCog(ClanCog, name="Setup"):
         await self.settings.update(interaction.guild.id, **{column: channel.id})
         await interaction.response.send_message(embed=embeds.success("Настройка", f"{label} → {channel.mention}"))
 
-    @setup_group.command(name="ticket-category", description="Категория для создания тикетов")
+    @setup.command(name="ticket-category", description="Категория для создания тикетов")
     @app_commands.guild_only()
     async def ticket_category(self, interaction: discord.Interaction, category: discord.CategoryChannel) -> None:
         await self.settings.update(interaction.guild.id, ticket_category_id=category.id)
         await interaction.response.send_message(embed=embeds.success("Настройка", f"Тикеты → {category.mention}"))
 
-    @setup_group.command(name="unset", description="Сбросить настройку канала")
+    @setup.command(name="unset", description="Сбросить настройку канала")
     @app_commands.describe(option="Какую настройку сбросить")
     @app_commands.guild_only()
     async def unset(self, interaction: discord.Interaction, option: str) -> None:
@@ -135,7 +137,7 @@ class SetupCog(ClanCog, name="Setup"):
         await self.settings.update(interaction.guild.id, **{column: None})
         await interaction.response.send_message(embed=embeds.success("Сброшено", f"`{column}` → пусто."))
 
-    @setup_group.command(name="show", description="Текущие настройки сервера")
+    @setup.command(name="show", description="Текущие настройки сервера")
     @app_commands.guild_only()
     async def show(self, interaction: discord.Interaction) -> None:
         settings = await self.settings.get(interaction.guild.id)

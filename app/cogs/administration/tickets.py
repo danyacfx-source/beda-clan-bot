@@ -22,10 +22,11 @@ from app.services.ticket_service import TicketService
 if TYPE_CHECKING:
     from app.core.bot import ClanBot
 
-ticket_group = app_commands.Group(name="ticket", description="Управление тикетами")
-
-
 class TicketCog(ClanCog, name="Tickets"):
+    # Группа обязана быть атрибутом класса кога: объявленная на уровне модуля
+    # она не попадает в дерево команд, и все подкоманды молча теряются.
+    ticket = app_commands.Group(name="ticket", description="Управление тикетами")
+
     def __init__(self, bot: ClanBot, tickets: TicketService) -> None:
         super().__init__(bot)
         self.tickets = tickets
@@ -33,7 +34,7 @@ class TicketCog(ClanCog, name="Tickets"):
     async def cog_unload(self) -> None:
         await self.tickets.aclose()
 
-    @ticket_group.command(name="panel", description="Отправить панель открытия тикета")
+    @ticket.command(name="panel", description="Отправить панель открытия тикета")
     @app_commands.describe(channel="Куда отправить панель (по умолчанию — текущий канал)")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
@@ -58,7 +59,7 @@ class TicketCog(ClanCog, name="Tickets"):
         )
         await interaction.response.send_message(embed=embeds.success("Панель отправлена", f"Панель в {target.mention}"), ephemeral=True)
 
-    @ticket_group.command(name="info", description="Информация о текущем тикете")
+    @ticket.command(name="info", description="Информация о текущем тикете")
     @app_commands.guild_only()
     async def info(self, interaction: discord.Interaction) -> None:
         channel = interaction.channel
