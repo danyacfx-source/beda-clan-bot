@@ -8,15 +8,15 @@ import discord
 from discord.ext import commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.logging_service import LoggingService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 
-class LoggingEventsCog(MegaCog, name="AuditLog"):
-    def __init__(self, bot: MegaBot, logging: LoggingService) -> None:
+class LoggingEventsCog(ClanCog, name="AuditLog"):
+    def __init__(self, bot: ClanBot, logging: LoggingService) -> None:
         super().__init__(bot)
         self.logging = logging
         self._restart_logged = False

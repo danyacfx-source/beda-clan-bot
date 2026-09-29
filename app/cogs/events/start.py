@@ -8,18 +8,18 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.presence import bot_activity
 from app.services.settings_service import SettingsService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot")
 
 
-class StartCog(MegaCog, name="Lifecycle"):
-    def __init__(self, bot: MegaBot, settings: SettingsService) -> None:
+class StartCog(ClanCog, name="Lifecycle"):
+    def __init__(self, bot: ClanBot, settings: SettingsService) -> None:
         super().__init__(bot)
         self.settings = settings
 

@@ -57,7 +57,7 @@ class ApiClient:
         service: str,
         *,
         timeout: float = 20.0,
-        user_agent: str = "DiscordMegaBot/3.3 (+https://discord.com)",
+        user_agent: str = "DiscordClanBot/3.3 (+https://discord.com)",
         proxy: str | None = None,
         max_concurrency: int = 8,
         circuit_failure_threshold: int = 5,

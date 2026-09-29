@@ -59,7 +59,7 @@ python main.py
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q          # 151 тест
+  pytest -q          # 155 тестов
 ruff check app main.py scripts tests
 ```
 

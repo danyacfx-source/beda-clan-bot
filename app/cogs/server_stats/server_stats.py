@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord.ext import tasks
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -41,8 +41,8 @@ def _clean_emoji(raw: str | None, fallback: str) -> str:
     return fallback
 
 
-class ServerStatsCog(MegaCog, name="ServerStats"):
-    def __init__(self, bot: MegaBot) -> None:
+class ServerStatsCog(ClanCog, name="ServerStats"):
+    def __init__(self, bot: ClanBot) -> None:
         super().__init__(bot)
         self._started = False
         self._presence_cache: dict[int, float] = {}

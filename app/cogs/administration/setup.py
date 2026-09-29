@@ -9,12 +9,12 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.setup_data import CHANNEL_CATEGORIES, EXTRA_ROLES, ROLE_SETTINGS
 from app.services.settings_service import SettingsService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 setup_group = app_commands.Group(name="setup", description="Настройка сервера")
 
@@ -71,8 +71,8 @@ _PERM_NAMES = {
 }
 
 
-class SetupCog(MegaCog, name="Setup"):
-    def __init__(self, bot: MegaBot, settings: SettingsService) -> None:
+class SetupCog(ClanCog, name="Setup"):
+    def __init__(self, bot: ClanBot, settings: SettingsService) -> None:
         super().__init__(bot)
         self.settings = settings
 
@@ -214,7 +214,7 @@ def _apply_permission_flags(permissions: discord.Permissions, specs) -> None:
     return None
 
 
-class ServerSetupCog(MegaCog, name="ServerSetup"):
+class ServerSetupCog(ClanCog, name="ServerSetup"):
     """Автонастройка сервера по конфигу (порт setup.js)."""
 
     async def _bot_top_role(self, guild: discord.Guild) -> discord.Role | None:

@@ -10,7 +10,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.health")
 
@@ -46,7 +46,7 @@ class ServiceHealth:
 class HealthChecker:
     """Проверка здоровья всех сервисов бота."""
 
-    def __init__(self, bot: MegaBot) -> None:
+    def __init__(self, bot: ClanBot) -> None:
         self.bot = bot
         self._last_check: dict[str, ServiceHealth] = {}
 

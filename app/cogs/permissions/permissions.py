@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord.ext import commands
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -66,8 +66,8 @@ def _as_bool(value: Any) -> bool | None:
     return None
 
 
-class PermissionsCog(MegaCog, name="Permissions"):
-    def __init__(self, bot: MegaBot) -> None:
+class PermissionsCog(ClanCog, name="Permissions"):
+    def __init__(self, bot: ClanBot) -> None:
         super().__init__(bot)
         self._started = False
 

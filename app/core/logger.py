@@ -18,7 +18,7 @@ def setup_logging(level: str = "INFO", log_dir: str | Path | None = None, *, to_
     level = level.upper()
     root.setLevel(level)
 
-    if not getattr(root, "_mega_bot_configured", False):
+    if not getattr(root, "_clan_bot_configured", False):
         console = logging.StreamHandler(sys.stdout)
         console.setFormatter(logging.Formatter(_FORMAT))
         root.addHandler(console)
@@ -30,7 +30,7 @@ def setup_logging(level: str = "INFO", log_dir: str | Path | None = None, *, to_
             file_handler.setFormatter(logging.Formatter(_FORMAT))
             root.addHandler(file_handler)
 
-        setattr(root, "_mega_bot_configured", True)
+        setattr(root, "_clan_bot_configured", True)
 
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)

@@ -8,18 +8,18 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
 _TICK = "\u2705"
 
 
-class RulesGateCog(MegaCog, name="RulesGate"):
-    def __init__(self, bot: MegaBot) -> None:
+class RulesGateCog(ClanCog, name="RulesGate"):
+    def __init__(self, bot: ClanBot) -> None:
         super().__init__(bot)
 
     async def cog_load(self) -> None:

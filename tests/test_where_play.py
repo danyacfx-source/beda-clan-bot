@@ -91,6 +91,23 @@ def test_normalize_honours_configured_bounds():
     assert normalize_join_code("1234567", minimum=7) == "1234567"
 
 
+def test_normalize_error_shows_input_and_expected_format():
+    # Пользователь вводит название сервера: подсказка обязана показывать, что
+    # он ввёл, и объяснять, где взять настоящий код.
+    with pytest.raises(WherePlayError) as info:
+        normalize_join_code("Мой сервер")
+    message = str(info.value)
+    assert "Мой сервер" in message
+    assert "UUID" in message
+    assert "из игры" in message
+
+
+def test_normalize_error_handles_empty_input():
+    with pytest.raises(WherePlayError) as info:
+        normalize_join_code("   ")
+    assert "пусто" in str(info.value)
+
+
 # --- снапшот ---
 
 

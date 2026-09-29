@@ -7,24 +7,24 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.db.base_repository import BaseRepository
     from app.services import Services
 
 
-class MegaCog(commands.Cog):
+class ClanCog(commands.Cog):
     """Базовый ког: держит бота и даёт типизированный доступ к сервисам и конфигу.
 
     Пример:
-        class FunCog(MegaCog, name="Fun"):
+        class FunCog(ClanCog, name="Fun"):
             @property
             def fun_service(self) -> FunService:
                 return self.services.fun_service
     """
 
-    bot: MegaBot
+    bot: ClanBot
 
-    def __init__(self, bot: MegaBot) -> None:
+    def __init__(self, bot: ClanBot) -> None:
         self.bot = bot
 
     @property
@@ -53,4 +53,4 @@ class BaseService(Generic[RepoT]):
         return self._repo
 
 
-__all__ = ["MegaCog", "BaseService"]
+__all__ = ["ClanCog", "BaseService"]

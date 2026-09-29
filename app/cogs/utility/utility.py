@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.checks import bot_has_permissions
 from app.utils.format import relative
 from app.utils.pagination import PaginatorView
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     pass
 
 
-class UtilityCog(MegaCog, name="Utility"):
+class UtilityCog(ClanCog, name="Utility"):
     async def _channel_or_current(
         self, interaction: discord.Interaction, channel: discord.TextChannel | None
     ) -> discord.TextChannel | None:

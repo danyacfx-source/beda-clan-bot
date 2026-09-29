@@ -5,7 +5,7 @@ import tempfile
 import pytest
 
 from app.config import Config
-from app.core.bot import MegaBot
+from app.core.bot import ClanBot
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_bot_bootstrap():
             status_activity="test",
             owner_id=None,
         )
-        bot = MegaBot(config)
+        bot = ClanBot(config)
         try:
             await bot.setup_hook()
             assert bot.db is not None

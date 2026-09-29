@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Config
-from app.core.bot import MegaBot
+from app.core.bot import ClanBot
 from app.db.database import Database
 from app.services import Services
 
@@ -20,5 +20,5 @@ class Root:
 
     config: Config
     db: Database
-    bot: MegaBot
+    bot: ClanBot
     services: Services

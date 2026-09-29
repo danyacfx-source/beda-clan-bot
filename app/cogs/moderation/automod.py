@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.settings_service import SettingsService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -67,8 +67,8 @@ def _is_stretched(content: str) -> bool:
     return bool(_STRETCH_RE.search(content))
 
 
-class AutoModCog(MegaCog, name="AutoMod"):
-    def __init__(self, bot: MegaBot, settings: SettingsService) -> None:
+class AutoModCog(ClanCog, name="AutoMod"):
+    def __init__(self, bot: ClanBot, settings: SettingsService) -> None:
         super().__init__(bot)
         self.settings = settings
         self._messages: dict[int, list[float]] = {}

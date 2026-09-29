@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.dossier_service import (
     SPECIALIZATIONS,
     DossierPermissionError,
@@ -20,7 +20,7 @@ from app.services.dossier_service import (
 )
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.dossiers")
 
@@ -256,8 +256,8 @@ class AdminCreateView(discord.ui.View):
         )
 
 
-class DossierCog(MegaCog, name="Dossiers"):
-    def __init__(self, bot: MegaBot, dossiers: DossierService) -> None:
+class DossierCog(ClanCog, name="Dossiers"):
+    def __init__(self, bot: ClanBot, dossiers: DossierService) -> None:
         super().__init__(bot)
         self.dossiers = dossiers
 

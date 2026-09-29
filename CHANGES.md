@@ -166,7 +166,7 @@
 
 ## 9. Что осталось на заметку
 
-- Внутреннее имя класса — `MegaBot` (`app/core/bot.py`). Функционально всё
+- Внутреннее имя класса — `ClanBot` (`app/core/bot.py`). Функционально всё
   верно, но для публичного релиза лучше переименовать в `ClanBot`.
 - Панель по-прежнему доверяет `PANEL_PASSWORD` из `.env`; для production
   лучше использовать `PANEL_PASSWORD_HASH` (Argon2) — поддержка есть.
@@ -295,3 +295,23 @@ JOIN_CODE_MIN, JOIN_CODE_MAX — все с разумными значениям
 Проверено на живом сервере: глобальных команд 64, гильдейских 0, чужие команды
 (`create_event`, `publish_caller`, `publish_rules`, `setup_tickets`,
 `setup_voice_rooms`) удалены.
+
+## 14. Переименование в BEDA Clan Bot и мелкие исправления
+
+- MegaBot -> ClanBot, MegaCog -> ClanCog (весь код, тесты, документация).
+- Убран бренд «Асуна Юки»: embeds.BOT_NAME теперь BEDA, подписи в когах
+  берут имя из общей константы.
+- Метрики веб-панели переименованы megabot_* -> clanbot_*.
+- main.py: preflight перед подключением печатает имя бота, application_id и
+  guild_id из токена, а PrivilegedIntentsRequired завершает процесс кодом 1
+  с понятной инструкцией вместо голого трейсбека.
+- where_play: ошибка неверного кода подключения теперь показывает, что
+  именно ввёл пользователь, и объясняет, где взять код (было: «нужно число или
+  UUID» без подсказки).
+- Бэкапы: DatabaseBackupManager больше не считает бота SQLite-only. Добавлены
+  Database.is_postgres и Database.backend, для PostgreSQL файлы называются
+  ot-*.dump, retention чистит оба типа. Отсутствующий pg_dump теперь
+  пишет одну понятную строку с инструкцией pt-get install postgresql-client
+  и попадает в /health, а не сыпет трейсбек каждый час.
+- Убраны дубли команд: /gstart (подмножество /giveaway) и /greroll
+  (копия /reroll).

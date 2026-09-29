@@ -78,7 +78,7 @@ class PollService(BaseService[PollsRepository]):
                 value=f"`{bar}`  **{share}%** · {votes} голосов",
                 inline=False,
             )
-        embed.set_footer(text=f"Асуна Юки  •  Опрос #{poll_id}  •  {total} голосов")
+        embed.set_footer(text=f"BEDA  •  Опрос #{poll_id}  •  {total} голосов")
         return embed
 
 

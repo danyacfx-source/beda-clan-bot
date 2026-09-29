@@ -5,7 +5,7 @@ import os
 import tempfile
 
 from app.config import Config
-from app.core.bot import MegaBot
+from app.core.bot import ClanBot
 
 
 class _FakeTree:
@@ -20,8 +20,8 @@ class _FakeTree:
         return []
 
 
-class _SyncBot(MegaBot):
-    """MegaBot с уже известным application_id — как после login()."""
+class _SyncBot(ClanBot):
+    """ClanBot с уже известным application_id — как после login()."""
 
     def __init__(self, config: Config, tree: _FakeTree) -> None:
         # tree нужен до super().__init__: конструктор клиента читает self.tree.

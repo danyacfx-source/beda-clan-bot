@@ -9,18 +9,18 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import tasks
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.scheduler_service import ScheduledMessagesService
 from app.types import ScheduledMessageRow
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
 
-class SchedulerCog(MegaCog, name="Scheduler"):
-    def __init__(self, bot: MegaBot, scheduled: ScheduledMessagesService) -> None:
+class SchedulerCog(ClanCog, name="Scheduler"):
+    def __init__(self, bot: ClanBot, scheduled: ScheduledMessagesService) -> None:
         super().__init__(bot)
         self.scheduled = scheduled
 

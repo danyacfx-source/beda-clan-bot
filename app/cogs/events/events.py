@@ -17,7 +17,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.views import EVENT_SIGNUP_OPTIONS, EventSignupView
 from app.services.event_service import (
     FIELD_LABELS,
@@ -32,7 +32,7 @@ from app.services.event_service import (
 from app.utils.format import truncate
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.services.event_service import EventService
     from app.types import EventRow
 
@@ -343,8 +343,8 @@ async def _redraw(client: discord.Client, event: EventRow, *, cancelled: bool = 
         logger.debug("Не удалось перерисовать сообщение ивента #%s", event["id"], exc_info=True)
 
 
-class EventsCog(MegaCog, name="Events"):
-    def __init__(self, bot: MegaBot, events: EventService) -> None:
+class EventsCog(ClanCog, name="Events"):
+    def __init__(self, bot: ClanBot, events: EventService) -> None:
         super().__init__(bot)
         self.events = events
 

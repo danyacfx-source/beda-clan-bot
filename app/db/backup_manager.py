@@ -1,4 +1,4 @@
-"""Периодические консистентные backup-файлы SQLite."""
+"""Периодические консистентные backup-файлы БД (SQLite и PostgreSQL)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,13 @@ from pathlib import Path
 from app.db.database import Database
 
 logger = logging.getLogger("bot.db.backups")
+
+_PG_DUMP_HINT = (
+    "pg_dump не найден в PATH. Для резервных копий PostgreSQL установите "
+    "postgresql-client (apt-get install postgresql-client) либо отключите "
+    "бэкапы: DB_BACKUP_INTERVAL_HOURS=0 не помогает, задайте каталог вручную "
+    "своим внешним cron."
+)
 
 
 class DatabaseBackupManager:
@@ -54,7 +61,7 @@ class DatabaseBackupManager:
     def start(self) -> None:
         if self.running:
             return
-        self._task = asyncio.create_task(self._run(), name="sqlite-backups")
+        self._task = asyncio.create_task(self._run(), name="db-backups")
 
     async def stop(self) -> None:
         task = self._task
@@ -65,52 +72,62 @@ class DatabaseBackupManager:
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
         except (TimeoutError, asyncio.CancelledError):
-            logger.warning("SQLite backup-таск не завершился за 10с; продолжаем shutdown")
+            logger.warning("Backup-таск не завершился за 10с; продолжаем shutdown")
+
+    @property
+    def _suffix(self) -> str:
+        return ".dump" if self.database.is_postgres else ".db"
 
     async def backup_now(self) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        target = self.directory / f"bot-{timestamp}.db"
+        target = self.directory / f"bot-{timestamp}{self._suffix}"
         # Секунда может совпасть при ручном вызове и старте; добавляем суффикс.
         if target.exists():
-            target = self.directory / f"bot-{timestamp}-{datetime.now(UTC).microsecond:06d}.db"
-        result = await self.database.backup(target)
+            target = self.directory / f"bot-{timestamp}-{datetime.now(UTC).microsecond:06d}{self._suffix}"
+        try:
+            result = await self.database.backup(target)
+        except FileNotFoundError as error:
+            hint = _PG_DUMP_HINT if self.database.is_postgres else f"Файл не найден: {error.filename}"
+            self._last_error = hint
+            raise RuntimeError(hint) from error
         self._last_backup = result
         self._last_error = None
         self._prune()
-        logger.info("SQLite backup создан: %s", result)
+        logger.info("Backup %s создан: %s", self.database.backend, result)
         return result
 
     async def _run(self) -> None:
         try:
             await self.backup_now()
-            while True:
-                await asyncio.sleep(self.interval_seconds)
-                await self.backup_now()
         except asyncio.CancelledError:
             raise
         except Exception:
-            self._last_error = "backup failed; retry scheduled"
-            logger.exception("Периодический SQLite backup завершился ошибкой; повтор через интервал")
-            # Ошибка единичного backup не должна выключать бота.
-            while True:
-                await asyncio.sleep(self.interval_seconds)
-                try:
-                    await self.backup_now()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    self._last_error = "backup failed; retry scheduled"
-                    logger.exception("Не удалось создать периодический SQLite backup")
+            logger.warning("Первичный backup не удался: %s", self._last_error)
+        while True:
+            await asyncio.sleep(self.interval_seconds)
+            try:
+                await self.backup_now()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Ошибка единичного backup не должна выключать бота.
+                logger.warning("Не удалось создать backup: %s", self._last_error)
 
     def _prune(self) -> None:
         backups = sorted(
+            (path for path in self.directory.glob("bot-*.dump") if path.is_file()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        ) + sorted(
             (path for path in self.directory.glob("bot-*.db") if path.is_file()),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
-        for old_backup in backups[self.retention :]:
+        for old_backup in sorted(backups, key=lambda path: path.stat().st_mtime, reverse=True)[
+            self.retention :
+        ]:
             try:
                 old_backup.unlink()
             except OSError:
-                logger.warning("Не удалось удалить старый SQLite backup: %s", old_backup, exc_info=True)
+                logger.warning("Не удалось удалить старый backup: %s", old_backup, exc_info=True)

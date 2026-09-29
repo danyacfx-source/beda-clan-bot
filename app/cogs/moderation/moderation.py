@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.utils import utcnow
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.checks import moderation_reason
 from app.services.logging_service import LoggingService
 from app.services.moderation_case_service import ModerationCaseService
@@ -19,7 +19,7 @@ from app.services.moderation_service import SLOWMODE_SUGGESTIONS, TIMEOUT_SUGGES
 from app.utils.pagination import PaginatorView
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -40,10 +40,10 @@ async def _slowmode_autocomplete(_interaction: discord.Interaction, current: str
     return [app_commands.Choice(name=value, value=value) for value in SLOWMODE_SUGGESTIONS if current in value]
 
 
-class ModerationCog(MegaCog, name="Moderation"):
+class ModerationCog(ClanCog, name="Moderation"):
     def __init__(
         self,
-        bot: MegaBot,
+        bot: ClanBot,
         moderation: ModerationService,
         logging: LoggingService,
         cases: ModerationCaseService,

@@ -1,4 +1,4 @@
-"""Интерактивный каталог команд бота «Асуна Юки»."""
+"""Интерактивный каталог команд бота «BEDA»."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.utils.format import truncate
 
 
@@ -143,7 +143,7 @@ def _overview(bot: discord.Client, entries: list[tuple[str, str, str]]) -> disco
     embed = embeds.brand(
         "Центр управления",
         "Все возможности бота собраны по разделам. Выберите категорию в меню ниже.",
-        footer=f"Асуна Юки  •  {len(entries)} команд  •  выберите раздел",
+        footer=f"BEDA  •  {len(entries)} команд  •  выберите раздел",
     )
     if bot.user:
         embed.set_author(name=bot.user.display_name, icon_url=bot.user.display_avatar.url)
@@ -165,7 +165,7 @@ def _category_embed(category: HelpCategory, entries: list[tuple[str, str, str]])
     return embeds.brand(
         f"{category.emoji}  {category.label}",
         "\n\n".join(lines) or "В этом разделе пока нет команд.",
-        footer=f"Асуна Юки  •  {len(selected)} команд  •  /help",
+        footer=f"BEDA  •  {len(selected)} команд  •  /help",
     )
 
 
@@ -226,7 +226,7 @@ class HelpView(discord.ui.View):
                 pass
 
 
-class HelpCog(MegaCog, name="Справка"):
+class HelpCog(ClanCog, name="Справка"):
     @app_commands.command(name="help", description="Открыть каталог команд бота")
     async def help_command(self, interaction: discord.Interaction) -> None:
         entries = _flatten(self.bot)

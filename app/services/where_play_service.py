@@ -31,7 +31,7 @@ from app.core.views import WherePlayCallerView
 from app.utils.format import truncate
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.db.where_play_repository import WherePlayRepository
     from app.types import WherePlayRow
 
@@ -55,14 +55,17 @@ def normalize_join_code(value: str, *, minimum: int = 8, maximum: int = 36) -> s
     обычно ищут в интерфейсе, кодом не является.
     """
     text = " ".join(value.split())
-    if not minimum <= len(text) <= maximum:
-        raise WherePlayError("Нужен код подключения из игры: число или UUID community-сервера.")
-    if _NUMERIC_CODE.match(text):
-        return text
-    lowered = text.lower()
-    if _UUID_CODE.match(lowered):
-        return lowered
-    raise WherePlayError("Нужен код подключения из игры: число или UUID community-сервера.")
+    if minimum <= len(text) <= maximum:
+        if _NUMERIC_CODE.match(text):
+            return text
+        if _UUID_CODE.match(text.lower()):
+            return text.lower()
+    shown = truncate(text, 40) or "(пусто)"
+    raise WherePlayError(
+        f"«{shown}» — это не код подключения. Нужен код community-сервера из игры: "
+        f"число от {minimum} до {maximum} символов либо UUID. "
+        "Скопируйте его из меню сервера в игре, а не название сервера."
+    )
 
 
 def find_server(snapshot: dict[str, Any], code: str) -> dict[str, Any] | None:
@@ -183,7 +186,7 @@ class ServerSnapshot:
 class WherePlayService(BaseService["WherePlayRepository"]):
     repo: WherePlayRepository
 
-    def __init__(self, repo: WherePlayRepository, bot: MegaBot) -> None:
+    def __init__(self, repo: WherePlayRepository, bot: ClanBot) -> None:
         super().__init__(repo)
         self.bot = bot
         self._api = ApiClient(

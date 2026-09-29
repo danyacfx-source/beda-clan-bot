@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from app.db.settings_repository import _INT_COLUMNS
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.db.settings_repository import SettingsRepository
 
 
@@ -22,7 +22,7 @@ class SettingsService:
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._ttl = 120.0
 
-    async def ensure_all_guilds(self, bot: MegaBot) -> None:
+    async def ensure_all_guilds(self, bot: ClanBot) -> None:
         for guild in bot.guilds:
             await self._repo.ensure_row(guild.id)
 

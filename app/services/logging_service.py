@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import discord
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.services.settings_service import SettingsService
 
 logger = logging.getLogger("bot.services")
@@ -34,7 +34,7 @@ def _embed_to_text(embed: discord.Embed) -> str:
 class LoggingService:
     """Записывает аудит-события в веб-ленту вместо отправки в Discord-каналы."""
 
-    def __init__(self, settings: SettingsService, bot: MegaBot) -> None:
+    def __init__(self, settings: SettingsService, bot: ClanBot) -> None:
         self._settings = settings
         self._bot = bot
 

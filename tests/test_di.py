@@ -15,7 +15,7 @@ from discord.ext import commands
 
 from app.cogs import COGS_PACKAGE
 from app.config import Config
-from app.core.bot import MegaBot
+from app.core.bot import ClanBot
 from app.core.composition import assemble
 from app.core.loader import COG_PROVIDERS, _build_cog
 from app.db.database import Database
@@ -81,7 +81,7 @@ def test_cogs_never_accept_repositories() -> None:
 @pytest.mark.asyncio
 async def test_setup_hook_injects_cog_with_services() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        bot = MegaBot(_config(tmp))
+        bot = ClanBot(_config(tmp))
         await bot.setup_hook()
         try:
             # bot.services собран через composition root.
@@ -100,7 +100,7 @@ async def test_setup_hook_injects_cog_with_services() -> None:
 @pytest.mark.asyncio
 async def test_all_cogs_load_through_composition() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        bot = MegaBot(_config(tmp))
+        bot = ClanBot(_config(tmp))
         await bot.setup_hook()
         try:
             loaded = bot.cogs
@@ -123,6 +123,6 @@ def test_build_cog_fallback_uses_constructor_defaults() -> None:
     from app.cogs.general.ping import PingCog
 
     with tempfile.TemporaryDirectory() as tmp:
-        bot = MegaBot(_config(tmp))
+        bot = ClanBot(_config(tmp))
         cog = _build_cog(bot, PingCog)
         assert isinstance(cog, PingCog)

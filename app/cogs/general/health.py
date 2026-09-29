@@ -6,11 +6,11 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.utils.time import format_duration
 
 
-class HealthCog(MegaCog, name="Health"):
+class HealthCog(ClanCog, name="Health"):
     """Краткий статус бота (/ping и /health живут в PingCog)."""
 
     @app_commands.command(name="status", description="Краткий статус бота")

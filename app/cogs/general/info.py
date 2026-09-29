@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 
 _BOT_BADGES = {
     "partner": "🤝 Partner",
@@ -17,7 +17,7 @@ _BOT_BADGES = {
 }
 
 
-class InfoCog(MegaCog, name="Информация"):
+class InfoCog(ClanCog, name="Информация"):
     @app_commands.command(name="serverinfo", description="Информация о сервере")
     @app_commands.guild_only()
     async def serverinfo(self, interaction: discord.Interaction) -> None:
@@ -46,7 +46,7 @@ class InfoCog(MegaCog, name="Информация"):
         )
         embed.add_field(name="КАНАЛЫ", value=f"**{len(guild.channels)}**", inline=True)
         embed.add_field(name="РОЛИ / БУСТЫ", value=f"**{len(guild.roles)}** / **{guild.premium_subscription_count}**", inline=True)
-        embed.set_footer(text=f"Асуна Юки  •  SERVER ID {guild.id}")
+        embed.set_footer(text=f"BEDA  •  SERVER ID {guild.id}")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="userinfo", description="Информация о пользователе")
@@ -67,17 +67,17 @@ class InfoCog(MegaCog, name="Информация"):
             embed.add_field(name=f"РОЛИ · {len(target.roles) - 1}", value=" ".join(roles), inline=False)
         if target.id == interaction.guild.owner_id:
             embed.add_field(name="ВЛАДЕЛЕЦ СЕРВЕРА", value="Да", inline=True)
-        embed.set_footer(text=f"Асуна Юки  •  USER ID {target.id}")
+        embed.set_footer(text=f"BEDA  •  USER ID {target.id}")
         await interaction.response.send_message(embed=embed)
 
 
-class AboutCog(MegaCog, name="About"):
+class AboutCog(ClanCog, name="About"):
     @app_commands.command(name="about", description="О боте")
     async def about(self, interaction: discord.Interaction) -> None:
         guilds = len(self.bot.guilds)
         uptime = dt.datetime.now(tz=dt.UTC) - self.bot.start_time
 
-        embed = embeds.brand("Асуна Юки", "Система управления Discord-сообществом.")
+        embed = embeds.brand("BEDA", "Система управления Discord-сообществом.")
         if self.bot.user:
             embed.set_thumbnail(url=self.bot.user.display_avatar.url)
         embed.add_field(name="СЕРВЕРОВ", value=f"`{guilds}`", inline=True)

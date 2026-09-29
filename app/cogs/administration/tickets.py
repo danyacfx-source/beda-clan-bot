@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.ticket_content import (
     CLAN_PANEL_BUTTON,
     CLAN_PANEL_EMOJI,
@@ -20,13 +20,13 @@ from app.core.views import TicketOpenView
 from app.services.ticket_service import TicketService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 ticket_group = app_commands.Group(name="ticket", description="Управление тикетами")
 
 
-class TicketCog(MegaCog, name="Tickets"):
-    def __init__(self, bot: MegaBot, tickets: TicketService) -> None:
+class TicketCog(ClanCog, name="Tickets"):
+    def __init__(self, bot: ClanBot, tickets: TicketService) -> None:
         super().__init__(bot)
         self.tickets = tickets
 

@@ -27,7 +27,7 @@ logger = logging.getLogger("bot")
 _SUPPORT_HINT = "Если ошибка повторяется — посмотрите логи или обратитесь к поддержке."
 
 
-class MegaBot(commands.Bot):
+class ClanBot(commands.Bot):
     config: Config
     db: Database | None
     services: Services | None
@@ -72,7 +72,7 @@ class MegaBot(commands.Bot):
             self.config.db_backup_retention,
         )
         # Весь граф обязан ссылаться на текущий Discord-клиент. Без явной
-        # передачи ``self`` composition root создаст второй MegaBot, и сервисы
+        # передачи ``self`` composition root создаст второй ClanBot, и сервисы
         # (логи, музыка, тикеты) окажутся привязаны не к активному соединению.
         root = assemble(config=self.config, db=self.db, bot=self)
         self.root = root

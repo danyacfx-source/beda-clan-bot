@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.config import Config
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.core.root import Root
     from app.db.database import Database
 
@@ -25,12 +25,12 @@ def assemble(
     *,
     config: Config,
     db: Database,
-    bot: MegaBot | None = None,
+    bot: ClanBot | None = None,
     #: Точечные подмены реализаций (тесты, переключение инфраструктуры).
     **overrides: Any,
 ) -> Root:
     """Строит и возвращает Root со всеми сервисами и ботом."""
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.db.birthdays_repository import BirthdaysRepository
     from app.db.dossiers_repository import DossiersRepository
     from app.db.events_repository import EventsRepository
@@ -77,7 +77,7 @@ def assemble(
 
     # --- Бот (нужен сервисам, которые пишут в Discord) ---
     if bot is None:
-        bot = MegaBot(config)
+        bot = ClanBot(config)
 
     # --- Сервисы, зависящие от бота и/или настроек ---
     logging_svc = override_or(overrides, "logging", LoggingService, settings, bot)

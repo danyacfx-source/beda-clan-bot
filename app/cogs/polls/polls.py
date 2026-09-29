@@ -8,18 +8,18 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.views import PollView
 from app.services.poll_service import PollService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 _MAX_OPTIONS = 5
 
 
-class PollsCog(MegaCog, name="Polls"):
-    def __init__(self, bot: MegaBot, polls: PollService) -> None:
+class PollsCog(ClanCog, name="Polls"):
+    def __init__(self, bot: ClanBot, polls: PollService) -> None:
         super().__init__(bot)
         self.polls = polls
 

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.db.backup_manager import DatabaseBackupManager
 from app.db.database import Database
 from app.db.restore import restore_backup
@@ -81,3 +83,35 @@ async def test_backup_manager_keeps_only_configured_retention(tmp_path: Path) ->
     assert manager.status()["last_backup"] is not None
     assert manager.status()["last_error"] is None
     await database.close()
+
+
+async def test_database_reports_backend(tmp_path: Path) -> None:
+    database = Database(str(tmp_path / "source.db"))
+    await database.connect()
+    assert database.is_postgres is False
+    assert database.backend == "sqlite"
+    await database.close()
+
+    # PostgreSQL включается только реальным подключением, поэтому проверяем
+    # контракт через тот же признак, которым пользуется менеджер бэкапов.
+    database._postgres = object()
+    assert database.is_postgres is True
+    assert database.backend == "postgresql"
+    assert DatabaseBackupManager(database, tmp_path / "backups")._suffix == ".dump"
+
+
+async def test_backup_manager_explains_missing_pg_dump(tmp_path: Path, monkeypatch) -> None:
+    database = Database(str(tmp_path / "source.db"))
+    await database.connect()
+    database._postgres = object()
+    manager = DatabaseBackupManager(database, tmp_path / "backups", interval_hours=1, retention=2)
+
+    async def _missing_tool(destination):
+        raise FileNotFoundError(2, "No such file or directory", "pg_dump")
+
+    monkeypatch.setattr(database, "backup", _missing_tool)
+    with pytest.raises(RuntimeError, match="pg_dump"):
+        await manager.backup_now()
+    # Причина попадает в статус, чтобы её было видно в /health.
+    assert "pg_dump" in str(manager.status()["last_error"])
+    assert manager.status()["last_backup"] is None

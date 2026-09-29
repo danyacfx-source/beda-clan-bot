@@ -11,11 +11,11 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.temp_voice_service import TempVoiceService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -212,8 +212,8 @@ class TempVoicePanelView(discord.ui.View):
         self.stop()
 
 
-class TempVoiceCog(MegaCog, name="TempVoice"):
-    def __init__(self, bot: MegaBot, tempvoice: TempVoiceService) -> None:
+class TempVoiceCog(ClanCog, name="TempVoice"):
+    def __init__(self, bot: ClanBot, tempvoice: TempVoiceService) -> None:
         super().__init__(bot)
         self.tempvoice = tempvoice
 
@@ -243,7 +243,7 @@ class TempVoiceCog(MegaCog, name="TempVoice"):
             "`03`  **Выгнать** · отключить участника\n"
             "`04`  **Передать** · назначить владельца\n"
             "`05`  **Удалить** · закрыть канал",
-            footer="Асуна Юки  •  управление голосовым каналом",
+            footer="BEDA  •  управление голосовым каналом",
         )
         await interaction.response.send_message(embed=embed, view=TempVoicePanelView(interaction.user.id, self.tempvoice))
 

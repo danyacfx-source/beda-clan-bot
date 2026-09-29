@@ -202,6 +202,14 @@ class Database:
             raise RuntimeError("БД не подключена")
         return self._conn
 
+    @property
+    def is_postgres(self) -> bool:
+        return self._postgres is not None
+
+    @property
+    def backend(self) -> str:
+        return "postgresql" if self._postgres is not None else "sqlite"
+
     async def connect(self) -> None:
         if self.path.startswith(("postgresql://", "postgres://")):
             from app.db.postgres_database import PostgresDatabase

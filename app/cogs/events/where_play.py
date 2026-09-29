@@ -14,19 +14,19 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.where_play_service import TEAMS, WherePlayError
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.services.where_play_service import WherePlayService
     from app.types import WherePlayRow
 
 logger = logging.getLogger("bot.cogs")
 
 
-class WherePlayCog(MegaCog, name="WherePlay"):
-    def __init__(self, bot: MegaBot, where_play: WherePlayService) -> None:
+class WherePlayCog(ClanCog, name="WherePlay"):
+    def __init__(self, bot: ClanBot, where_play: WherePlayService) -> None:
         super().__init__(bot)
         self.where_play = where_play
 
@@ -97,7 +97,10 @@ class WherePlayCog(MegaCog, name="WherePlay"):
         )
 
     @app_commands.command(name="where_play", description="Указать сервер и команду общего сбора")
-    @app_commands.describe(server="Код подключения из игры (не название сервера)", team="Наша команда")
+    @app_commands.describe(
+        server="Код подключения из игры: число или UUID community-сервера, НЕ название сервера",
+        team="Наша команда",
+    )
     @app_commands.choices(team=[app_commands.Choice(name=name, value=name) for name in TEAMS])
     @app_commands.guild_only()
     async def where_play(self, interaction: discord.Interaction, server: str, team: str) -> None:

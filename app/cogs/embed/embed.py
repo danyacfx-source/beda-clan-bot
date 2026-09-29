@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -382,10 +382,10 @@ class EmbedBuilderView(discord.ui.View):
         await interaction.followup.send(f"✅ Эмбед отправлен в {target.mention}.", ephemeral=True)
 
 
-class EmbedBuilderCog(MegaCog, name="EmbedBuilder"):
+class EmbedBuilderCog(ClanCog, name="EmbedBuilder"):
     MAX_DRAFTS = 200
 
-    def __init__(self, bot: MegaBot) -> None:
+    def __init__(self, bot: ClanBot) -> None:
         super().__init__(bot)
         self.drafts: dict[int, EmbedDraft] = {}
 

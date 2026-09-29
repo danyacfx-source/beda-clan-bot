@@ -10,17 +10,17 @@ from discord import app_commands
 from discord.ext import commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.utils.format import relative
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 _MAX_ENTRIES = 10
 
 
-class SnipeCog(MegaCog, name="Snipe"):
-    def __init__(self, bot: MegaBot) -> None:
+class SnipeCog(ClanCog, name="Snipe"):
+    def __init__(self, bot: ClanBot) -> None:
         super().__init__(bot)
         self._deleted: dict[tuple[int, int], deque[discord.Message]] = defaultdict(lambda: deque(maxlen=_MAX_ENTRIES))
         self._edited: dict[tuple[int, int], deque[discord.Message]] = defaultdict(lambda: deque(maxlen=_MAX_ENTRIES))

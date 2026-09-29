@@ -6,11 +6,11 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.utils.time import format_duration
 
 
-class PingCog(MegaCog, name="General"):
+class PingCog(ClanCog, name="General"):
     @app_commands.command(name="ping", description="Проверка задержки бота")
     async def ping(self, interaction: discord.Interaction) -> None:
         latency = round(self.bot.latency * 1000)
@@ -40,5 +40,5 @@ class PingCog(MegaCog, name="General"):
         embed.add_field(name="Коги", value=f"`{len(self.bot.cogs)}`", inline=True)
         embed.add_field(name="Голосовые подключения", value=f"`{len(self.bot.voice_clients)}`", inline=True)
         embed.add_field(name="Опциональные модули", value=", ".join(enabled) or "не включены", inline=False)
-        embed.set_footer(text=f"Асуна Юки • uptime {format_duration(int(self.bot.uptime.total_seconds()))}")
+        embed.set_footer(text=f"BEDA • uptime {format_duration(int(self.bot.uptime.total_seconds()))}")
         await interaction.response.send_message(embed=embed, ephemeral=True)

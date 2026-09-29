@@ -10,13 +10,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from app.config import Config
-from app.core.bot import MegaBot
+from app.core.bot import ClanBot
 
 _bot_logger = "bot"
 
 
-def _bot() -> MegaBot:
-    bot = MegaBot.__new__(MegaBot)
+def _bot() -> ClanBot:
+    bot = ClanBot.__new__(ClanBot)
     bot.config = Config(
         token="x",
         prefix="!",

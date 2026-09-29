@@ -41,7 +41,7 @@ from app.core.webpanel.log_ring import RingBufferHandler
 from app.core.webpanel.routes import register_routes
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.services import Services
     from app.types import GiveawayRow
 
@@ -380,7 +380,7 @@ def _raw_embed_to_client(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 class WebPanel:
-    def __init__(self, bot: MegaBot) -> None:
+    def __init__(self, bot: ClanBot) -> None:
         self.bot = bot
         config = bot.config
         if config.panel_port is None:
@@ -932,37 +932,37 @@ class WebPanel:
     async def _prometheus_metrics(self, request: web.Request) -> web.Response:
         """Отдаёт компактный Prometheus text exposition через ту же авторизацию."""
         lines = [
-            "# HELP megabot_api_requests_total Total external API requests.",
-            "# TYPE megabot_api_requests_total counter",
-            "# HELP megabot_api_successes_total Successful external API requests.",
-            "# TYPE megabot_api_successes_total counter",
-            "# HELP megabot_api_failures_total Circuit-worthy external API failures.",
-            "# TYPE megabot_api_failures_total counter",
-            "# HELP megabot_api_retries_total External API retries.",
-            "# TYPE megabot_api_retries_total counter",
-            "# HELP megabot_api_circuit_open Whether an API circuit is open.",
-            "# TYPE megabot_api_circuit_open gauge",
+            "# HELP clanbot_api_requests_total Total external API requests.",
+            "# TYPE clanbot_api_requests_total counter",
+            "# HELP clanbot_api_successes_total Successful external API requests.",
+            "# TYPE clanbot_api_successes_total counter",
+            "# HELP clanbot_api_failures_total Circuit-worthy external API failures.",
+            "# TYPE clanbot_api_failures_total counter",
+            "# HELP clanbot_api_retries_total External API retries.",
+            "# TYPE clanbot_api_retries_total counter",
+            "# HELP clanbot_api_circuit_open Whether an API circuit is open.",
+            "# TYPE clanbot_api_circuit_open gauge",
         ]
         for item in ApiClient.snapshots():
             service = re.sub(r"[^a-zA-Z0-9_]", "_", str(item["service"]).lower()).strip("_") or "unknown"
             labels = f'service="{service}"'
             lines.extend(
                 (
-                    f"megabot_api_requests_total{{{labels}}} {item['requests']}",
-                    f"megabot_api_successes_total{{{labels}}} {item['successes']}",
-                    f"megabot_api_failures_total{{{labels}}} {item['failures']}",
-                    f"megabot_api_retries_total{{{labels}}} {item['retries']}",
-                    f"megabot_api_circuit_open{{{labels}}} {1 if item['circuit_open'] else 0}",
+                    f"clanbot_api_requests_total{{{labels}}} {item['requests']}",
+                    f"clanbot_api_successes_total{{{labels}}} {item['successes']}",
+                    f"clanbot_api_failures_total{{{labels}}} {item['failures']}",
+                    f"clanbot_api_retries_total{{{labels}}} {item['retries']}",
+                    f"clanbot_api_circuit_open{{{labels}}} {1 if item['circuit_open'] else 0}",
                 )
             )
         lines.extend(
             (
-                "# HELP megabot_panel_sessions_active Active panel sessions.",
-                "# TYPE megabot_panel_sessions_active gauge",
-                f"megabot_panel_sessions_active {len(self._sessions)}",
-                "# HELP megabot_panel_analytics_clients Active analytics WebSocket clients.",
-                "# TYPE megabot_panel_analytics_clients gauge",
-                f"megabot_panel_analytics_clients {len(self._analytics_clients)}",
+                "# HELP clanbot_panel_sessions_active Active panel sessions.",
+                "# TYPE clanbot_panel_sessions_active gauge",
+                f"clanbot_panel_sessions_active {len(self._sessions)}",
+                "# HELP clanbot_panel_analytics_clients Active analytics WebSocket clients.",
+                "# TYPE clanbot_panel_analytics_clients gauge",
+                f"clanbot_panel_analytics_clients {len(self._analytics_clients)}",
             )
         )
         return web.Response(

@@ -8,17 +8,17 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.views import ConfirmView
 from app.services.moderation_service import ModerationService
 from app.utils.format import plural
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 
-class WarnsCog(MegaCog, name="Warns"):
-    def __init__(self, bot: MegaBot, moderation: ModerationService) -> None:
+class WarnsCog(ClanCog, name="Warns"):
+    def __init__(self, bot: ClanBot, moderation: ModerationService) -> None:
         super().__init__(bot)
         self.moderation = moderation
 

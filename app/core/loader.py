@@ -20,7 +20,7 @@ from discord.ext import commands
 from app.cogs import COGS_PACKAGE
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
     from app.services import Services
 
 logger = logging.getLogger("bot")
@@ -28,14 +28,14 @@ logger = logging.getLogger("bot")
 
 #: Источники зависимостей когов: имя параметра → сервис из bot.services.
 #: Параметр ``bot`` подставляется первым позиционным аргументом.
-def _services(bot: MegaBot) -> Services:
+def _services(bot: ClanBot) -> Services:
     services = bot.services
     if services is None:
         raise RuntimeError("Сервисы не собраны до загрузки когов")
     return services
 
 
-COG_PROVIDERS: dict[str, Callable[[MegaBot], object]] = {
+COG_PROVIDERS: dict[str, Callable[[ClanBot], object]] = {
     "settings": lambda b: _services(b).settings,
     "moderation": lambda b: _services(b).moderation,
     "cases": lambda b: _services(b).cases,
@@ -53,7 +53,7 @@ COG_PROVIDERS: dict[str, Callable[[MegaBot], object]] = {
 }
 
 
-def _build_cog(bot: MegaBot, cls: type) -> object:
+def _build_cog(bot: ClanBot, cls: type) -> object:
     """Строит ког по сигнатуре конструктора и таблице ``COG_PROVIDERS``.
 
     Все обязательные зависимости резолвятся — ``cls(bot, **kwargs)``.
@@ -78,7 +78,7 @@ def _build_cog(bot: MegaBot, cls: type) -> object:
     return cls(bot, **kwargs)
 
 
-async def load_cogs(bot: MegaBot) -> list[str]:
+async def load_cogs(bot: ClanBot) -> list[str]:
     """Обходит app.cogs детерминированно и регистрирует коги по одному.
 
     - порядок определяется именами модулей (стабильный лог);
@@ -129,7 +129,7 @@ async def load_cogs(bot: MegaBot) -> list[str]:
     return loaded
 
 
-async def register_persistent_views(bot: MegaBot) -> None:
+async def register_persistent_views(bot: ClanBot) -> None:
     """Регистрирует кнопки тикетов, опросов, розыгрышей, ивентов и личных дел, которые переживают рестарт бота."""
     import json
 

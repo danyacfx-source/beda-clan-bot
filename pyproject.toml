@@ -45,7 +45,7 @@ warn_unused_ignores = true
 
 # discord.py exposes Cog/command metadata through metaclass keyword arguments.
 # The available stubs model those classes as object.__init_subclass__, so mypy
-# reports false positives for valid declarations such as ``class X(MegaCog,
+# reports false positives for valid declarations such as ``class X(ClanCog,
 # name="X")``. Other call-site errors remain enabled.
 [[tool.mypy.overrides]]
 module = ["app.cogs.*"]

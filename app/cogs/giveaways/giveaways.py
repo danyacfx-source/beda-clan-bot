@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.core.views import GiveawayView
 from app.services.giveaway_service import GiveawayService
 from app.types import GiveawayRow
@@ -19,15 +19,15 @@ from app.utils.format import relative
 from app.utils.time import parse_duration
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
 _MAX_DURATION = 30 * 24 * 3600
 
 
-class GiveawaysCog(MegaCog, name="Giveaways"):
-    def __init__(self, bot: MegaBot, giveaways: GiveawayService) -> None:
+class GiveawaysCog(ClanCog, name="Giveaways"):
+    def __init__(self, bot: ClanBot, giveaways: GiveawayService) -> None:
         super().__init__(bot)
         self.giveaways = giveaways
 
@@ -137,18 +137,6 @@ class GiveawaysCog(MegaCog, name="Giveaways"):
             await self.giveaways.finish(giveaway_id)
             raise
 
-    @app_commands.command(name="gstart", description="Запустить розыгрыш")
-    @app_commands.describe(
-        duration="Длительность, например: 10m, 1h, 1d",
-        prize="Что разыгрываем",
-        winners="Сколько победителей",
-        min_days="Минимум дней на сервере для участия",
-    )
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.guild_only()
-    async def g_start(self, interaction: discord.Interaction, duration: str, prize: str, winners: int = 1, min_days: int = 0) -> None:
-        await self._start_giveaway(interaction, duration, prize, winners, min_days)
-
     @app_commands.command(name="giveaway", description="Создать розыгрыш")
     @app_commands.describe(
         prize="Что разыгрываем",
@@ -219,13 +207,6 @@ class GiveawaysCog(MegaCog, name="Giveaways"):
         embed = embeds.success("Перерозыгрыш", "Новые победители объявлены в канале.")
         embed.add_field(name="Подсказка", value=f"Окончание было: {relative(datetime.fromisoformat(giveaway['ends_at']))}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="greroll", description="Переразыграть приз среди участников")
-    @app_commands.describe(message_id="ID сообщения с розыгрышем")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.guild_only()
-    async def g_reroll(self, interaction: discord.Interaction, message_id: int) -> None:
-        await self._do_reroll(interaction, message_id)
 
     @app_commands.command(name="reroll", description="Переразыграть приз среди участников")
     @app_commands.describe(message_id="ID сообщения с розыгрышем")

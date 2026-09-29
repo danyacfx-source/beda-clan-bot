@@ -9,10 +9,10 @@ import discord
 from discord.ext import tasks
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -59,8 +59,8 @@ def _fit_report(report: str) -> str:
     return prefix + "```text\n" + "\n".join(lines) + "```"
 
 
-class RamReportCog(MegaCog, name="RamReport"):
-    def __init__(self, bot: MegaBot) -> None:
+class RamReportCog(ClanCog, name="RamReport"):
+    def __init__(self, bot: ClanBot) -> None:
         super().__init__(bot)
 
     async def cog_load(self) -> None:
@@ -87,7 +87,7 @@ class RamReportCog(MegaCog, name="RamReport"):
             return
         current = self._rss_mb()
         peak = self._peak_mb()
-        embed = embeds.neutral("Монитор памяти", "Автоматическая диагностика процесса бота «Асуна Юки».")
+        embed = embeds.neutral("Монитор памяти", "Автоматическая диагностика процесса бота «BEDA».")
         embed.add_field(name="СЕЙЧАС", value=f"`{current:.1f} MB`", inline=True)
         embed.add_field(name="ПИК", value=f"`{peak:.1f} MB`", inline=True)
         embed.add_field(name="ИНТЕРВАЛ", value=f"`{self.bot.config.ram_report_interval_minutes} min`", inline=True)

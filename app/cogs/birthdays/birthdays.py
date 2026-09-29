@@ -13,21 +13,21 @@ import discord
 from discord import app_commands
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.birthday_service import BirthdayService
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
 DATE_RE = re.compile(r"^\s*(\d{1,2})[./\\-](\d{1,2})\s*$")
 
 
-class BirthdaysCog(MegaCog, name="Birthdays"):
+class BirthdaysCog(ClanCog, name="Birthdays"):
     birthday = app_commands.Group(name="birthday", description="Дни рождения участников")
 
-    def __init__(self, bot: MegaBot, birthdays: BirthdayService) -> None:
+    def __init__(self, bot: ClanBot, birthdays: BirthdayService) -> None:
         super().__init__(bot)
         self.birthdays = birthdays
         self._task: asyncio.Task[None] | None = None
@@ -80,7 +80,7 @@ class BirthdaysCog(MegaCog, name="Birthdays"):
         embed = embeds.brand(
             "Сегодня день рождения",
             "## Время поздравлять! 🎂\n\n" + "\n".join(lines),
-            footer=f"Асуна Юки  •  именинников сегодня: {len(lines)}",
+            footer=f"BEDA  •  именинников сегодня: {len(lines)}",
         )
         content = None
         role_id = self.bot.config.birthday_ping_role_id
@@ -151,7 +151,7 @@ class BirthdaysCog(MegaCog, name="Birthdays"):
         embed = embeds.brand(
             "Календарь дней рождения",
             "\n".join(f"`{index:02d}`  {line}" for index, line in enumerate(lines[:25], 1)),
-            footer=f"Асуна Юки  •  ближайшие события: {min(len(lines), 25)}",
+            footer=f"BEDA  •  ближайшие события: {min(len(lines), 25)}",
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

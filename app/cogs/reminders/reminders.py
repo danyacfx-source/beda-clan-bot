@@ -11,14 +11,14 @@ from discord import app_commands
 from discord.ext import tasks
 
 from app.core import embeds
-from app.core.base import MegaCog
+from app.core.base import ClanCog
 from app.services.reminder_service import ReminderService
 from app.types import ReminderRow
 from app.utils.format import plural, relative
 from app.utils.time import parse_duration
 
 if TYPE_CHECKING:
-    from app.core.bot import MegaBot
+    from app.core.bot import ClanBot
 
 logger = logging.getLogger("bot.cogs")
 
@@ -26,8 +26,8 @@ _MAX_SECONDS = 30 * 24 * 3600
 _MAX_REMINDERS = 20
 
 
-class RemindersCog(MegaCog, name="Reminders"):
-    def __init__(self, bot: MegaBot, reminders: ReminderService) -> None:
+class RemindersCog(ClanCog, name="Reminders"):
+    def __init__(self, bot: ClanBot, reminders: ReminderService) -> None:
         super().__init__(bot)
         self.reminders = reminders
 
