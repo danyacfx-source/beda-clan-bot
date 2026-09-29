@@ -40,32 +40,37 @@ logger = logging.getLogger("bot.where_play")
 TEAMS: tuple[str, ...] = ("🔵 Синие", "🔴 Красные", "🟢 Зелёные")
 
 _EPOCH = datetime.fromtimestamp(0, UTC)
-_NUMERIC_CODE = re.compile(r"^\d{1,32}$")
-_UUID_CODE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# Код подключения: латиница, цифры, дефис и подчёркивание. Пробелы внутри кода
+# не допускаются — именно они отличают код от названия сервера.
+_JOIN_CODE = re.compile(r"^[A-Za-z0-9_-]+$")
+_UUID_CODE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 class WherePlayError(ValueError):
     """Ошибка сценария «где играем», показываемая пользователю."""
 
 
-def normalize_join_code(value: str, *, minimum: int = 8, maximum: int = 36) -> str:
+def normalize_join_code(value: str, *, minimum: int = 4, maximum: int = 128) -> str:
     """Приводит код подключения к каноническому виду.
 
-    Допустимы только числа community-сервера и UUID: название сервера, которое
-    обычно ищут в интерфейсе, кодом не является.
+    Принимаются числа, UUID и любые буквенно-цифровые коды длиной от
+    ``minimum`` до ``maximum``. Название сервера отсеивается по пробелам и
+    не-ASCII символам: в игре в поле кода ожидают именно идентификатор.
     """
     text = " ".join(value.split())
-    if minimum <= len(text) <= maximum:
-        if _NUMERIC_CODE.match(text):
-            return text
-        if _UUID_CODE.match(text.lower()):
-            return text.lower()
+    if minimum <= len(text) <= maximum and _JOIN_CODE.match(text):
+        return text.lower() if _UUID_CODE.match(text) else text
     shown = truncate(text, 40) or "(пусто)"
-    raise WherePlayError(
-        f"«{shown}» — это не код подключения. Нужен код community-сервера из игры: "
-        f"число от {minimum} до {maximum} символов либо UUID. "
-        "Скопируйте его из меню сервера в игре, а не название сервера."
-    )
+    if not minimum <= len(text) <= maximum:
+        reason = f"длина {len(text)} симв., допустимо от {minimum} до {maximum}"
+    elif " " in text:
+        reason = "это похоже на название сервера, а не на код"
+    else:
+        reason = "недопустимые символы: нужны только латиница, цифры, «-» и «_»"
+    raise WherePlayError(f"«{shown}» — это не код подключения ({reason}). Скопируйте код community-сервера из игры.")
 
 
 def find_server(snapshot: dict[str, Any], code: str) -> dict[str, Any] | None:

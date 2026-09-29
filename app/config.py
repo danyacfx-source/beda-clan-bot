@@ -72,8 +72,8 @@ class Config:
     # Карточка «Где играем» (источник — публичный снапшот WardogServers)
     where_play_api_url: str = "https://api.wardogservers.com/v1/snapshot"
     where_play_poll_seconds: int = 60
-    join_code_min: int = 8
-    join_code_max: int = 36
+    join_code_min: int = 4
+    join_code_max: int = 128
 
     # Вебпанель конструктора эмбедов
     panel_host: str = "127.0.0.1"
@@ -177,8 +177,8 @@ class Config:
             events_max_active_per_guild=max(1, min(200, int(os.getenv("EVENTS_MAX_ACTIVE_PER_GUILD", "25")))),
             where_play_api_url=os.getenv("WHERE_PLAY_API_URL", "https://api.wardogservers.com/v1/snapshot"),
             where_play_poll_seconds=max(15, int(os.getenv("WHERE_PLAY_POLL_SECONDS", "60"))),
-            join_code_min=max(4, min(32, int(os.getenv("JOIN_CODE_MIN", "8")))),
-            join_code_max=max(8, min(64, int(os.getenv("JOIN_CODE_MAX", "36")))),
+            join_code_min=max(4, min(32, int(os.getenv("JOIN_CODE_MIN", "4")))),
+            join_code_max=max(4, min(128, int(os.getenv("JOIN_CODE_MAX", "128")))),
             panel_host=os.getenv("PANEL_HOST", "127.0.0.1"),
             panel_port=_single_int(os.getenv("PANEL_PORT")),
             panel_password=os.getenv("PANEL_PASSWORD"),

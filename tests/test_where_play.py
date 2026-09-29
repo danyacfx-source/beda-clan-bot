@@ -78,17 +78,21 @@ def test_normalize_accepts_numeric_and_uuid():
     assert normalize_join_code("0F8FAD5B-D9CB-469F-A165-70867728950E") == "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
-@pytest.mark.parametrize("value", ["Мой сервер", "12 34", "123-456", "12345", "a" * 40, ""])
-def test_normalize_rejects_names_and_bad_length(value):
+@pytest.mark.parametrize(
+    "value",
+    ["12345", "123-456", "a" * 40, "server_code_42", "a" * 128, "a" * 4, "A1_-"],
+)
+def test_normalize_accepts_codes_within_bounds(value):
+    assert normalize_join_code(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Мой сервер", "12 34", "", "   ", "abc", "a" * 129, "сервер123", "код-123", "code/123", "code.123"],
+)
+def test_normalize_rejects_names_bad_length_and_odd_characters(value):
     with pytest.raises(WherePlayError):
         normalize_join_code(value)
-
-
-def test_normalize_honours_configured_bounds():
-    # Короткий числовой код запрещён, если минимум больше его длины.
-    with pytest.raises(WherePlayError):
-        normalize_join_code("1234567", minimum=8)
-    assert normalize_join_code("1234567", minimum=7) == "1234567"
 
 
 def test_normalize_error_shows_input_and_expected_format():
@@ -98,14 +102,33 @@ def test_normalize_error_shows_input_and_expected_format():
         normalize_join_code("Мой сервер")
     message = str(info.value)
     assert "Мой сервер" in message
-    assert "UUID" in message
+    assert "название сервера" in message
     assert "из игры" in message
+
+
+def test_normalize_error_explains_wrong_length_and_symbols():
+    with pytest.raises(WherePlayError) as short:
+        normalize_join_code("abc")
+    assert "длина 3 симв." in str(short.value)
+    with pytest.raises(WherePlayError) as symbols:
+        normalize_join_code("code/123")
+    assert "недопустимые символы" in str(symbols.value)
 
 
 def test_normalize_error_handles_empty_input():
     with pytest.raises(WherePlayError) as info:
         normalize_join_code("   ")
     assert "пусто" in str(info.value)
+
+
+def test_normalize_honours_configured_bounds():
+    # Границы из конфига важнее дефолтов: сервер может выдавать и короткие,
+    # и длинные коды.
+    with pytest.raises(WherePlayError):
+        normalize_join_code("12345", minimum=6)
+    with pytest.raises(WherePlayError):
+        normalize_join_code("123456", maximum=5)
+    assert normalize_join_code("123456", minimum=6, maximum=10) == "123456"
 
 
 # --- снапшот ---

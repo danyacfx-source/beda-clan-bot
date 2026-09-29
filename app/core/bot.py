@@ -97,7 +97,7 @@ class ClanBot(commands.Bot):
             logger.debug("Синк команд: application_id ещё не известен — пропуск")
             return
         # Команды регистрируются глобально, поэтому синкаем только глобальный
-        # список. Гильдейный sync() берёт только явно гильдейские команды
+        # список. Гильдейский sync() берёт только явно гильдейские команды
         # (CommandTree._get_all_commands) — у нас их нет, и такой вызов ушёл бы
         # с пустым списком, стерев все команды сервера.
         try:
@@ -110,6 +110,34 @@ class ClanBot(commands.Bot):
         except discord.HTTPException:
             names = []
         logger.info("Синхронизировано команд: %d (%s)", len(synced or []), ", ".join(names[:20]))
+        await self._sync_commands_to_guild()
+
+    async def _sync_commands_to_guild(self) -> None:
+        """Копирует глобальные команды в гильдию, чтобы они были видны сразу.
+
+        Глобальная публикация применяется до часа: Discord раскладывает её по
+        своим шардам. Копия в гильдию применяется мгновенно, поэтому команды
+        появляются в списке сразу после рестарта. Глобальный список при этом
+        сохраняется — бот продолжает работать и на других серверах.
+        """
+        guild_id = self.config.guild_id
+        if guild_id is None:
+            logger.info("GUILD_ID не задан: команды появятся после глобальной публикации")
+            return
+        if self.get_guild(guild_id) is None:
+            logger.warning("Гильдия %s недоступна: быстрые команды не скопированы", guild_id)
+            return
+        try:
+            await self.tree.copy_global_to(guild=guild_id)
+            guild_synced = await self.tree.sync(guild=guild_id)
+        except (discord.HTTPException, discord.MissingApplicationID, discord.ConnectionClosed) as exc:
+            logger.warning("Не удалось скопировать команды в гильдию %s: %s", guild_id, exc)
+            return
+        logger.info(
+            "Команды скопированы в гильдию %s: %d (доступны сразу, без ожидания глобальной публикации)",
+            guild_id,
+            len(guild_synced or []),
+        )
 
     async def close(self) -> None:
         webpanel = self.webpanel
