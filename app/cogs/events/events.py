@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -83,6 +84,23 @@ class _FlowView(discord.ui.View):
     async def on_timeout(self) -> None:
         self.service.flows.discard_token(self.token)
 
+    async def _fail(self, interaction: discord.Interaction) -> None:
+        """Отвечает на сбой шага вместо молчания.
+
+        Без этого любое исключение внутри кнопки показывается в Discord как
+        «Приложение не ответило вовремя»: ни следа, ни подсказки, что делать.
+        """
+        logger.exception("Шаг мастера ивента упал: %s", interaction.data.get("custom_id"))
+        self.service.flows.discard(self.user_id)
+        with suppress(discord.HTTPException):
+            await interaction.response.send_message(
+                embed=embeds.error(
+                    "Шаг не отправился",
+                    "Мастер сломался на этом шаге. Начните заново командой `/event`.",
+                ),
+                ephemeral=True,
+            )
+
     async def _require_flow(self, interaction: discord.Interaction) -> EventFlow | None:
         flow = self.service.flows.get_by_token(self.user_id, self.token)
         if flow is not None:
@@ -117,13 +135,17 @@ class _ChoiceView(_FlowView):
 
     def _make(self, value: str) -> ViewCallback:
         async def callback(interaction: discord.Interaction) -> None:
-            flow = await self._require_flow(interaction)
-            if flow is None:
+            try:
+                flow = await self._require_flow(interaction)
+                if flow is None:
+                    return
+                self.stop()
+                flow.touch()
+                await self._on_pick(self.service, flow, value)
+                embed, view = self._next_step(flow)
+            except Exception:
+                await self._fail(interaction)
                 return
-            self.stop()
-            flow.touch()
-            await self._on_pick(self.service, flow, value)
-            embed, view = self._next_step(flow)
             await interaction.response.edit_message(embed=embed, view=view)
 
         return callback
@@ -215,31 +237,33 @@ class MentionRoleView(_FlowView):
             else f"Доступно ролей: {len(pingable)}."
         )
 
-    def summary(self) -> str:
-        return f"{self._hint} Выбрано: без упоминания."
-
     async def _on_select(self, interaction: discord.Interaction) -> None:
-        flow = await self._require_flow(interaction)
-        if flow is None:
+        try:
+            flow = await self._require_flow(interaction)
+            if flow is None:
+                return
+            select = self.children[0]
+            assert isinstance(select, discord.ui.Select)
+            value = select.values[0]
+            role = self._guild.get_role(int(value)) if value != "none" else None
+            if value != "none" and role is None:
+                await interaction.response.send_message(
+                    embed=embeds.error("Роль не найдена", "Она исчезла или была удалена. Выберите другую."),
+                    ephemeral=True,
+                )
+                return
+            flow.data["mention_role_id"] = role.id if role is not None else None
+            flow.step = _STEP_PUBLISH
+            flow.touch()
+            self.stop()
+            chosen = role.mention if role is not None else "без упоминания"
+            view = PublishView(flow.user_id, self.service.flows.token_for(flow), self.service)
+        except Exception:
+            await self._fail(interaction)
             return
-        select = self.children[0]
-        assert isinstance(select, discord.ui.Select)
-        value = select.values[0]
-        role = self._guild.get_role(int(value)) if value != "none" else None
-        if value != "none" and role is None:
-            await interaction.response.send_message(
-                embed=embeds.error("Роль не найдена", "Она исчезла или была удалена. Выберите другую."),
-                ephemeral=True,
-            )
-            return
-        flow.data["mention_role_id"] = role.id if role is not None else None
-        flow.step = _STEP_PUBLISH
-        flow.touch()
-        self.stop()
-        chosen = role.mention if role is not None else "без упоминания"
         await interaction.response.edit_message(
             embed=embeds.info("Шаг 8/8 — публикация", f"Опубликовать ивент? Упомянуть: {chosen}"),
-            view=PublishView(flow.user_id, self.service.flows.token_for(flow), self.service),
+            view=view,
         )
 
 

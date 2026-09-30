@@ -1,6 +1,7 @@
 """Тесты порта ивентов: мастер, валидация, участие, напоминания."""
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -340,6 +341,7 @@ class _FakeInteraction:
         self.guild_id = 100
         self.calls: list[tuple[str, dict]] = []
         self.response = _FakeResponse(self.calls)
+        self.data = {"custom_id": "event_pick:test"}
 
     @property
     def names(self) -> list[str]:
@@ -441,6 +443,27 @@ async def test_mention_role_list_caps_at_discord_limit(service):
     # Discord разрешает не больше 25 пунктов: 24 роли плюс «Без упоминания».
     assert len(select.options) == 25
     assert select.options[-1].value == "none"
+
+
+async def test_step_failure_answers_instead_of_going_silent(service, caplog):
+    """Сбой внутри кнопки раньше выглядел как «Приложение не ответило вовремя»."""
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="not_going"))
+    view = NotGoingView(7, service.flows.token_for(flow), service, _fake_guild())
+    interaction = _FakeInteraction(7)
+
+    def boom(_flow):
+        raise RuntimeError("сломалось")
+
+    view._next_step = boom  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR):
+        await view.children[0].callback(interaction)
+
+    # Ответ ушёл, мастер закрыт, причина есть в логе.
+    assert interaction.names == ["send"]
+    assert service.flows.get(7) is None
+    assert "Шаг мастера ивента упал" in caplog.text
+    assert "сломалось" in caplog.text
 
 
 async def test_expired_flow_answers_instead_of_staying_silent(service):
