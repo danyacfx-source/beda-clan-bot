@@ -122,8 +122,15 @@ class _ChoiceView(_FlowView):
             self.stop()
             flow.touch()
             await self._on_pick(self.service, flow, value)
+            embed, view = self._next_step(flow)
+            await interaction.response.edit_message(embed=embed, view=view)
 
         return callback
+
+    def _next_step(self, flow: EventFlow) -> tuple[discord.Embed, discord.ui.View | None]:
+        """Что показать после выбора. Обязателен: Discord ждёт ответ ровно 3 секунды,
+        а следующий шаг мастера приходит из DM и ответить за него нельзя."""
+        raise NotImplementedError
 
     async def on_timeout(self) -> None:
         self.service.flows.discard_token(self.token)
@@ -148,6 +155,10 @@ class EventTypeView(_ChoiceView):
         flow.data["event_type"] = value
         flow.step = _STEP_DESCRIPTION
 
+    def _next_step(self, flow: EventFlow) -> tuple[discord.Embed, discord.ui.View | None]:
+        del flow
+        return embeds.info("Шаг 3/7 — описание", "Отправьте описание ивента в этот чат."), None
+
 
 class NotGoingView(_ChoiceView):
     def __init__(self, user_id: int, token: int, service: EventService) -> None:
@@ -167,6 +178,13 @@ class NotGoingView(_ChoiceView):
         del service
         flow.data["show_not_going"] = value == "yes"
         flow.step = _STEP_PUBLISH
+
+    def _next_step(self, flow: EventFlow) -> tuple[discord.Embed, discord.ui.View | None]:
+        # Раньше PublishView не отправлялся нигде: шаг 7 упирался в тупик.
+        return (
+            embeds.info("Шаг 7/7 — публикация", "Опубликовать ивент?"),
+            PublishView(flow.user_id, self.service.flows.token_for(flow), self.service),
+        )
 
 
 class PublishView(_FlowView):

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
+from app.cogs.events.events import EventTypeView, NotGoingView, PublishView
 from app.db.database import Database
 from app.db.events_repository import SIGNUP_ROLES, EventsRepository
 from app.services.event_service import (
@@ -260,3 +262,68 @@ def test_flow_expiry_uses_ttl():
 def test_event_types_have_labels():
     for key, (label, emoji, color) in EVENT_TYPES.items():
         assert key and label and emoji
+
+
+# --- кнопки мастера: Discord ждёт ответ ровно 3 секунды ---
+
+
+class _FakeResponse:
+    def __init__(self, calls: list[tuple[str, dict]]) -> None:
+        self._calls = calls
+
+    async def send_message(self, **kwargs) -> None:
+        self._calls.append(("send", kwargs))
+
+    async def edit_message(self, **kwargs) -> None:
+        self._calls.append(("edit", kwargs))
+
+    async def defer(self, **kwargs) -> None:
+        self._calls.append(("defer", kwargs))
+
+
+class _FakeInteraction:
+    """Заглушка interaction: важно лишь, что на нажатие ушёл хоть один ответ."""
+
+    def __init__(self, user_id: int) -> None:
+        self.user = SimpleNamespace(id=user_id)
+        self.guild_id = 100
+        self.calls: list[tuple[str, dict]] = []
+        self.response = _FakeResponse(self.calls)
+
+    @property
+    def names(self) -> list[str]:
+        return [name for name, _ in self.calls]
+
+
+async def test_type_button_answers_and_advances_step(service):
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="type"))
+    view = EventTypeView(7, service.flows.token_for(flow), service)
+    interaction = _FakeInteraction(7)
+
+    await view.children[0].callback(interaction)
+
+    # Раньше ответ не уходил вовсе — Discord показывал «Приложение не ответило вовремя».
+    assert interaction.names == ["edit"]
+    assert flow.step == "description"
+
+
+async def test_not_going_button_hands_over_to_publish_step(service):
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="not_going"))
+    view = NotGoingView(7, service.flows.token_for(flow), service)
+    interaction = _FakeInteraction(7)
+
+    await view.children[0].callback(interaction)
+
+    assert interaction.names == ["edit"]
+    assert flow.step == "publish"
+    # Шаг 7 раньше упирался в тупик: PublishView не отправлялся нигде.
+    assert isinstance(interaction.calls[0][1]["view"], PublishView)
+
+
+async def test_expired_flow_answers_instead_of_staying_silent(service):
+    view = EventTypeView(7, 987654, service)
+    interaction = _FakeInteraction(7)
+
+    await view.children[0].callback(interaction)
+
+    assert interaction.names == ["edit"]
