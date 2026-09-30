@@ -119,14 +119,15 @@ class WherePlayCog(ClanCog, name="WherePlay"):
             )
             return
         try:
-            updated = await self.where_play.select_server(interaction.guild_id, server, team, interaction.user.id)
+            updated, warning = await self.where_play.select_server(interaction.guild_id, server, team, interaction.user.id)
         except WherePlayError as exc:
             await interaction.followup.send(embed=embeds.error("Не получилось", str(exc)), ephemeral=True)
             return
         if updated is not None:
-            await self.where_play.publish(updated)
+            await self.where_play.publish(updated, warning)
         await interaction.followup.send(
-            embed=embeds.success("Сервер обновлён", f"Карточка в <#{row['channel_id']}> обновлена."), ephemeral=True
+            embed=embeds.success("Сервер обновлён", f"Карточка в <#{row['channel_id']}> обновлена." + (f"\n{warning}" if warning else "")),
+            ephemeral=True,
         )
 
     @app_commands.command(name="stop_play", description="Завершить общий сбор")

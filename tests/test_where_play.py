@@ -70,6 +70,66 @@ async def service(repo, bot):
     return WherePlayService(repo, bot)
 
 
+def _stub_snapshot(service, snapshot):
+    """Подменяет сетевой снапшот, чтобы тесты не ходили в WardogServers."""
+
+    class _Stub:
+        async def get(self, now=None):
+            return snapshot
+
+    service._snapshot = _Stub()
+
+
+# --- выбор сервера при устаревшем снапшоте ---
+
+
+async def test_select_server_succeeds_on_stale_snapshot_with_warning(service):
+    await service.configure_channel(100, 200, 300)
+    _stub_snapshot(service, {**_SNAPSHOT, "meta": {**_SNAPSHOT["meta"], "stale": True}})
+
+    row, warning = await service.select_server(100, "12345678", TEAMS[0], 5)
+
+    assert row is not None
+    assert row["code"] == "12345678"
+    assert warning is not None and "устаревшие" in warning
+    assert "2026-09-29T12:00:00Z" in warning
+
+
+async def test_select_server_has_no_warning_when_fresh(service):
+    await service.configure_channel(100, 200, 300)
+    fresh = {
+        **_SNAPSHOT,
+        "meta": {
+            **_SNAPSHOT["meta"],
+            "stale": False,
+            "fetchedAt": _now().isoformat().replace("+00:00", "Z"),
+        },
+    }
+    _stub_snapshot(service, fresh)
+
+    row, warning = await service.select_server(100, "12345678", TEAMS[0], 5)
+
+    assert row is not None
+    assert warning is None
+
+
+async def test_select_server_still_rejects_unknown_code(service):
+    await service.configure_channel(100, 200, 300)
+    _stub_snapshot(service, {**_SNAPSHOT, "meta": {**_SNAPSHOT["meta"], "stale": True}})
+
+    with pytest.raises(WherePlayError, match="не найден"):
+        await service.select_server(100, "does-not-exist", TEAMS[0], 5)
+
+
+async def test_select_server_still_rejects_bad_team(service):
+    await service.configure_channel(100, 200, 300)
+    _stub_snapshot(service, _SNAPSHOT)
+
+    with pytest.raises(WherePlayError, match="команду"):
+        await service.select_server(100, "12345678", "фиолетовые", 5)
+
+
+
 # --- код подключения ---
 
 

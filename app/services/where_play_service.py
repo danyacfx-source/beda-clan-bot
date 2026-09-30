@@ -233,19 +233,34 @@ class WherePlayService(BaseService["WherePlayRepository"]):
     async def bind_message(self, guild_id: int, message_id: int) -> None:
         await self._repo.set_message_id(guild_id, message_id)
 
-    async def select_server(self, guild_id: int, code: str, team: str, caller_id: int) -> WherePlayRow | None:
-        """Проверяет код по свежему снапшоту и сохраняет выбор."""
+    async def select_server(
+        self, guild_id: int, code: str, team: str, caller_id: int
+    ) -> tuple[WherePlayRow | None, str | None]:
+        """Проверяет код по снапшоту и сохраняет выбор.
+
+        Возвращает пару ``(row, warning)``. Устаревшие данные больше не
+        блокируют выбор: карта, режим и состав сбора меняются медленно, а
+        жёсткий отказ делал фичу полностью нерабочей, пока поставщик
+        не обновлял снапшот. ``refresh()`` трактует устаревание как
+        предупреждение — здесь ведём себя так же.
+        """
         conf = await self._where_play_conf(guild_id)
         normalized = normalize_join_code(code, minimum=conf["join_code_min"], maximum=conf["join_code_max"])
         if team not in TEAMS:
             raise WherePlayError("Выберите команду из списка: 🔵 Синие, 🔴 Красные или 🟢 Зелёные.")
         snapshot = await self._snapshot.get()
+        warning: str | None = None
         if is_stale(snapshot):
-            raise WherePlayError("Данные API устарели. Текущая карточка сохранена; повторите позже.")
+            warning = (
+                "⚠️ Источник передаёт устаревшие данные "
+                f"(снимок от {snapshot['meta'].get('fetchedAt', 'неизвестно')}). "
+                "Данные ниже могут быть неточны."
+            )
+            logger.warning("WardogServers отдал устаревший снапшот при выборе сервера: %s", warning)
         selected = find_server(snapshot, normalized)
         if not selected:
             raise WherePlayError(
-                "Код не найден в актуальном списке. Проверьте код подключения из игры и повторите позже. Текущий сервер не изменён."
+                "Код не найден в списке серверов. Проверьте код подключения из игры. Текущий сервер не изменён."
             )
         payload = json.dumps({"server": selected, "fetchedAt": snapshot["meta"].get("fetchedAt")}, ensure_ascii=False)
         await self._repo.set_active(
@@ -256,7 +271,7 @@ class WherePlayService(BaseService["WherePlayRepository"]):
             payload=payload,
             fetched_at=datetime.now(UTC),
         )
-        return await self._repo.get(guild_id)
+        return await self._repo.get(guild_id), warning
 
     async def stop(self, guild_id: int) -> WherePlayRow | None:
         row = await self._repo.get(guild_id)
