@@ -278,7 +278,8 @@ async def _handle_event_signup(interaction: discord.Interaction, role: str) -> N
         await interaction.response.send_message(embed=embeds.error("Ошибка", "Сервисы недоступны."), ephemeral=True)
         return
     event = None
-    custom_id = getattr(interaction.data, "custom_id", "") or ""
+    # interaction.data — это dict из JSON, а не объект: getattr по нему молча даёт "".
+    custom_id = str((interaction.data or {}).get("custom_id") or "")
     event_id = _event_id_from_custom_id(custom_id)
     if event_id is None:
         await interaction.response.send_message(embed=embeds.error("Ошибка", "Ивент не распознан."), ephemeral=True)
