@@ -380,7 +380,7 @@ async def _handle_caller_press(services: Services, interaction: discord.Interact
         )
         return True
 
-    category = interaction.guild.get_channel(interaction.bot.config.temp_voice_category_id or 0)
+    category = interaction.guild.get_channel(interaction.client.config.temp_voice_category_id or 0)
     if not isinstance(category, discord.CategoryChannel):
         await interaction.followup.send(
             embed=embeds.error(
@@ -455,7 +455,7 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
         return
     if not isinstance(interaction.user, discord.Member) or interaction.user.voice is None:
         return
-    category = interaction.guild.get_channel(interaction.bot.config.temp_voice_category_id or 0)
+    category = interaction.guild.get_channel(interaction.client.config.temp_voice_category_id or 0)
     if not isinstance(category, discord.CategoryChannel):
         await interaction.response.send_message(embed=embeds.error("Не настроено", "Категория голосовых комнат не задана."), ephemeral=True)
         return
