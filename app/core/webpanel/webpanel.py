@@ -537,6 +537,10 @@ class WebPanel:
     async def _security_middleware(self, request: web.Request, handler: Any) -> web.Response:
         try:
             response = await handler(request)
+            if response is None:
+                # Забытый return в обработчике раньше ронял middleware
+                # с невнятным "'NoneType' object has no attribute 'headers'".
+                raise RuntimeError(f"обработчик {request.path} не вернул ответ")
         except web.HTTPException as exc:
             response = web.Response(status=exc.status, headers=exc.headers, text=exc.text)
         except Exception:
@@ -1090,6 +1094,21 @@ class WebPanel:
             },
         }
 
+    def _record_metrics(self, sample: dict[str, Any]) -> None:
+        """Складывает срез в кольцевые буферы графиков панели.
+
+        Вызывается из /api/overview, /api/monitor и /api/stats, поэтому
+        принимает и полный набор полей, и срез _live_sample().
+        """
+        now = datetime.now(UTC).isoformat()
+        if "latency_ms" in sample:
+            self._lat.append({"t": now, "v": sample.get("latency_ms", 0)})
+        if "mem_mb" in sample:
+            self._mem.append({"t": now, "v": sample["mem_mb"]})
+        guild = sample.get("guild") or {}
+        if guild.get("online") is not None:
+            self._online.append({"t": now, "v": guild.get("online", 0)})
+
     async def _api_overview(self, request: web.Request) -> web.Response:
         bot = self.bot
         online = bot.is_ready() and bot.user is not None
@@ -1117,14 +1136,10 @@ class WebPanel:
                 "channels": len(guild.channels),
                 "roles": len(guild.roles),
             }
-        now = datetime.now(UTC).isoformat()
-        if "latency_ms" in data:
-            self._lat.append({"t": now, "v": data.get("latency_ms", 0)})
-        if "mem_mb" in data:
-            self._mem.append({"t": now, "v": data["mem_mb"]})
-        guild = data.get("guild") or {}
-        if guild.get("online") is not None:
-            self._online.append({"t": now, "v": guild.get("online", 0)})
+        self._record_metrics(data)
+        # Без этого return обработчик отдавал None, /api/overview отвечал 500,
+        # и панель рисовала бота оффлайн при полностью рабочем соединении.
+        return self._json(data)
 
     async def _api_settings_get(self, request: web.Request) -> web.Response:
         guild = self._primary_guild()
