@@ -206,13 +206,13 @@ class NotGoingView(_ChoiceView):
     def _next_step(self, flow: EventFlow) -> tuple[discord.Embed, discord.ui.View | None]:
         # Раньше PublishView не отправлялся нигде: шаг упирался в тупик.
         return (
-            embeds.info("Шаг 7/8 — упоминание роли", "Выберите роль, которую бот упомянет в карточке ивента."),
+            embeds.info("Шаг 8/8 — упоминание роли", "Выберите роль, которую бот упомянет в карточке ивента."),
             MentionRoleView(flow.user_id, self.service.flows.token_for(flow), self.service, self._guild),
         )
 
 
 class MentionRoleView(_FlowView):
-    """Шаг 7/8: роль для упоминания в карточке ивента."""
+    """Шаг 8/8: роль для упоминания в карточке ивента."""
 
     #: Discord разрешает максимум 25 пунктов в одном списке.
     MAX_OPTIONS = 24
