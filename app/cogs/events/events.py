@@ -220,7 +220,8 @@ class MentionRoleView(_FlowView):
     def __init__(self, user_id: int, token: int, service: EventService, guild: discord.Guild) -> None:
         super().__init__(user_id, token, service)
         self._guild = guild
-        pingable = [role for role in guild.roles if role.is_mentionable() and role.id != guild.id]
+        # У discord.Role это слот- поле mentionable, а не метод is_mentionable().
+        pingable = [role for role in guild.roles if role.mentionable and role.id != guild.id]
         pingable.sort(key=lambda role: (-role.position, role.name.lower()))
         options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in pingable[: self.MAX_OPTIONS]]
         options.append(discord.SelectOption(label="Без упоминания", value="none"))

@@ -349,14 +349,20 @@ class _FakeInteraction:
 
 
 class _FakeRole:
-    def __init__(self, role_id: int, name: str, position: int) -> None:
+    """Заглушка discord.Role.
+
+    ``mentionable`` повторяет слот- поле настоящего discord.Role, а не
+    выдуманный метод: на выдуманном API тесты проходили, а бот падал.
+    """
+
+    __slots__ = ("id", "name", "position", "mention", "mentionable")
+
+    def __init__(self, role_id: int, name: str, position: int, mentionable: bool = True) -> None:
         self.id = role_id
         self.name = name
         self.position = position
         self.mention = f"<@&{role_id}>"
-
-    def is_mentionable(self) -> bool:
-        return True
+        self.mentionable = mentionable
 
 
 class _FakeGuild:
@@ -371,7 +377,7 @@ class _FakeGuild:
 
 def _fake_guild(role_count: int = 3) -> _FakeGuild:
     roles = [_FakeRole(1000 + i, f"Роль {i}", i) for i in range(role_count)]
-    roles.append(_FakeRole(999, "@everyone", -1))
+    roles.append(_FakeRole(999, "@everyone", -1, mentionable=False))
     return _FakeGuild(roles)
 
 
@@ -443,6 +449,32 @@ async def test_mention_role_list_caps_at_discord_limit(service):
     # Discord разрешает не больше 25 пунктов: 24 роли плюс «Без упоминания».
     assert len(select.options) == 25
     assert select.options[-1].value == "none"
+
+
+async def test_mention_role_skips_roles_that_cannot_be_pinged(service):
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="mention"))
+    guild = _fake_guild(role_count=2)
+    # Роль без права упоминания и @everyone в список попадать не должны.
+    guild.roles.append(_FakeRole(1500, "Тихая роль", 5, mentionable=False))
+    view = MentionRoleView(7, service.flows.token_for(flow), service, guild)
+
+    select = view.children[0]
+    assert isinstance(select, discord.ui.Select)
+    values = {option.value for option in select.options}
+    assert values == {"1000", "1001", "none"}
+    assert "Тихая роль" not in {option.label for option in select.options}
+    assert "@everyone" not in {option.label for option in select.options}
+
+
+def test_roles_are_filtered_with_real_discord_api():
+    """Сторож от выдуманного API: у discord.Role есть слот mentionable.
+
+    На заглушке с выдуманным методом is_mentionable() тесты проходили,
+    а бот падал в бою с AttributeError.
+    """
+    assert hasattr(discord.Role, "mentionable")
+    assert not hasattr(discord.Role, "is_mentionable")
+    assert _FakeRole(1, "Роль", 0).mentionable is True
 
 
 async def test_step_failure_answers_instead_of_going_silent(service, caplog):
