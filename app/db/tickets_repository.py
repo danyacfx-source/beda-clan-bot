@@ -12,10 +12,18 @@ if TYPE_CHECKING:
 
 
 class TicketsRepository(BaseRepository):
-    async def create(self, guild_id: int, channel_id: int, creator_id: int, created_at: datetime) -> int:
+    async def create(
+        self,
+        guild_id: int,
+        channel_id: int,
+        creator_id: int,
+        created_at: datetime,
+        voice_channel_id: int | None = None,
+    ) -> int:
         cursor = await self.db.execute(
-            "INSERT INTO tickets (guild_id, channel_id, creator_id, created_at) VALUES (?, ?, ?, ?)",
-            (guild_id, channel_id, creator_id, created_at.isoformat()),
+            "INSERT INTO tickets (guild_id, channel_id, creator_id, created_at, voice_channel_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (guild_id, channel_id, creator_id, created_at.isoformat(), voice_channel_id),
         )
         if cursor.lastrowid is None:
             raise RuntimeError("SQLite не вернул ID тикета")

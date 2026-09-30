@@ -8,7 +8,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from app.services.settings_service import SettingsService
 
 _MAX_TRANSCRIPT_MESSAGES = 300
+#: Пауза перед удалением каналов закрытого тикета. В тестах подменяется на 0.
+_DELETE_DELAY_SECONDS = 10.0
 logger = logging.getLogger("bot.tickets")
 
 
@@ -37,6 +39,7 @@ logger = logging.getLogger("bot.tickets")
 class TicketCreateResult:
     channel: discord.TextChannel | None
     error: str | None = None
+    voice_channel: discord.VoiceChannel | None = None
 
 
 @dataclass(slots=True)
@@ -87,6 +90,22 @@ class TicketService:
                 )
         name = re.sub(r"[^a-z0-9-]", "-", member.name.lower()).strip("-") or "ticket"
         prefix = re.sub(r"[^a-z0-9-]", "-", (settings.get("ticket_channel_prefix") or "ticket").lower()).strip("-") or "ticket"
+
+        # Голосовая комната видна только подавшему и ролям поддержки.
+        voice_overwrites: dict[Any, discord.PermissionOverwrite] = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            bot_member: discord.PermissionOverwrite(
+                view_channel=True, connect=True, speak=True, move_members=True
+            ),
+            member: discord.PermissionOverwrite(view_channel=True, connect=True, speak=True),
+        }
+        for role_id in self._config.ticket_support_role_ids if self._config else ():
+            role = guild.get_role(role_id)
+            if role is not None:
+                voice_overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True, connect=True, speak=True
+                )
+
         try:
             channel = await guild.create_text_channel(
                 name=f"{prefix}-{name}",
@@ -97,10 +116,27 @@ class TicketService:
         except discord.HTTPException as exc:
             return TicketCreateResult(channel=None, error=f"Discord API: {exc}")
 
+        # Голосовая — best-effort: нехватка прав или лимит каналов не должна
+        # ломать создание тикета, но о факте пишем в интро и в лог.
+        voice_channel: discord.VoiceChannel | None = None
+        voice_error: str | None = None
+        try:
+            voice_channel = await guild.create_voice_channel(
+                name=f"{prefix}-{name}",
+                category=category if isinstance(category, discord.CategoryChannel) else None,
+                overwrites=voice_overwrites,
+                reason=f"Голосовая тикета от {member}",
+            )
+        except discord.HTTPException as exc:
+            voice_error = str(exc)
+            logger.warning("Не удалось создать голосовую к тикету %s: %s", member.id, exc)
+
         ticket_id: int | None = None
         try:
             now = datetime.now(UTC)
-            ticket_id = await self._repo.create(guild.id, channel.id, member.id, now)
+            ticket_id = await self._repo.create(
+                guild.id, channel.id, member.id, now, voice_channel.id if voice_channel else None
+            )
 
             intro_title = settings.get("ticket_intro_title") or CLAN_INTRO_TITLE
             intro_text = (settings.get("ticket_intro_description") or CLAN_INTRO_TEXT).replace(
@@ -113,6 +149,14 @@ class TicketService:
             )
             for index, (name, value) in enumerate(CLAN_INTRO_FIELDS):
                 intro.add_field(name=name, value=value, inline=index < CLAN_INTRO_INLINE)
+            if voice_channel is not None:
+                intro.add_field(name="Голосовая", value=voice_channel.mention, inline=False)
+            elif voice_error:
+                intro.add_field(
+                    name="Голосовая",
+                    value="Не создана: недостаточно прав или достигнут лимит каналов.",
+                    inline=False,
+                )
             await channel.send(
                 embed=intro,
                 view=TicketCloseView(
@@ -122,13 +166,13 @@ class TicketService:
                 ),
             )
         except discord.HTTPException as exc:
-            await self._rollback_failed_create(channel, ticket_id)
+            await self._rollback_failed_create(channel, voice_channel, ticket_id)
             return TicketCreateResult(channel=None, error=f"Discord API: {exc}")
         except Exception:
-            await self._rollback_failed_create(channel, ticket_id)
+            await self._rollback_failed_create(channel, voice_channel, ticket_id)
             logger.exception("Не удалось завершить создание тикета в канале %s", channel.id)
             return TicketCreateResult(channel=None, error="Внутренняя ошибка при создании тикета.")
-        return TicketCreateResult(channel=channel)
+        return TicketCreateResult(channel=channel, voice_channel=voice_channel)
 
     async def get_open_ticket(self, guild_id: int, channel_id: int) -> TicketRow | None:
         ticket = await self._repo.by_channel(channel_id)
@@ -153,6 +197,13 @@ class TicketService:
         if channel is None:
             await self._repo.close(ticket["ticket_id"], datetime.now(UTC))
             await self._repo.save_transcript(ticket["ticket_id"], "")
+            # Текстового канала уже нет, но голосовая могла уцелеть.
+            orphan_voice = self._voice_of(guild, ticket)
+            if orphan_voice is not None:
+                try:
+                    await orphan_voice.delete(reason="Тикет закрыт")
+                except discord.HTTPException:
+                    logger.debug("Не удалось удалить голосовую %s", orphan_voice.id, exc_info=True)
             return TicketCloseResult(transcript_channel_mention="(канал тикета уже удалён)")
         return await self.close(guild, channel, closer)
 
@@ -183,7 +234,8 @@ class TicketService:
             await self._send_transcript(guild, channel, transcript.file, summary)
             transcript.cleanup()
 
-        task = asyncio.create_task(self._delete_after(channel))
+        voice_channel = self._voice_of(guild, ticket)
+        task = asyncio.create_task(self._delete_after(channel, voice_channel=voice_channel))
         self._delete_tasks.add(task)
         task.add_done_callback(self._delete_tasks.discard)
 
@@ -200,12 +252,30 @@ class TicketService:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._delete_tasks.clear()
 
-    async def _rollback_failed_create(self, channel: discord.TextChannel, ticket_id: int | None) -> None:
+    def _voice_of(self, guild: discord.Guild, ticket: TicketRow) -> discord.VoiceChannel | None:
+        """Голосовая комната тикета, если она ещё жива."""
+        voice_id = ticket.get("voice_channel_id")
+        if not voice_id:
+            return None
+        channel = guild.get_channel(int(voice_id))
+        return channel if isinstance(channel, discord.VoiceChannel) else None
+
+    async def _rollback_failed_create(
+        self,
+        channel: discord.TextChannel,
+        voice_channel: discord.VoiceChannel | None = None,
+        ticket_id: int | None = None,
+    ) -> None:
         if ticket_id is not None:
             try:
                 await self._repo.close(ticket_id, datetime.now(UTC))
             except Exception:
                 logger.exception("Не удалось закрыть незавершённый тикет %s", ticket_id)
+        if voice_channel is not None:
+            try:
+                await voice_channel.delete(reason="Откат неудачного создания тикета")
+            except discord.HTTPException:
+                logger.debug("Не удалось удалить голосовую %s", voice_channel.id, exc_info=True)
         try:
             await channel.delete(reason="Откат неудачного создания тикета")
         except discord.HTTPException:
@@ -257,9 +327,18 @@ class TicketService:
                 pass
 
     @staticmethod
-    async def _delete_after(channel: discord.TextChannel, delay: float = 10.0) -> None:
-        await asyncio.sleep(delay)
+    async def _delete_after(
+        channel: discord.TextChannel,
+        delay: float | None = None,
+        voice_channel: discord.VoiceChannel | None = None,
+    ) -> None:
+        await asyncio.sleep(_DELETE_DELAY_SECONDS if delay is None else delay)
+        if voice_channel is not None:
+            try:
+                await voice_channel.delete(reason="Тикет закрыт")
+            except discord.HTTPException:
+                logger.debug("Не удалось удалить голосовую %s", voice_channel.id, exc_info=True)
         try:
-            await channel.delete(reason="Тикет закрыт")
+            await channel.delete(reason="Закрыт автоматически")
         except discord.HTTPException:
             pass

@@ -82,6 +82,7 @@ class TicketRow(TypedDict):
     created_at: str
     closed_at: str | None
     transcript: str | None
+    voice_channel_id: int | None
 
 
 class BirthdayRow(TypedDict):

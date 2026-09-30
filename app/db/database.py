@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     status     TEXT    NOT NULL DEFAULT 'open',
     created_at TEXT    NOT NULL,
     closed_at  TEXT,
-    transcript TEXT
+    transcript TEXT,
+    voice_channel_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS reminders (
@@ -432,6 +433,12 @@ class Database:
                 """
             )
             await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (11, datetime('now'))")
+        if 12 not in applied:
+            # Голосовая комната тикета: удаляется вместе с текстовым каналом.
+            columns = await conn.execute_fetchall("PRAGMA table_info(tickets)")
+            if "voice_channel_id" not in {row[1] for row in columns}:
+                await conn.execute("ALTER TABLE tickets ADD COLUMN voice_channel_id INTEGER")
+            await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (12, datetime('now'))")
         conn = self.conn
         cursor = await conn.execute("PRAGMA table_info(guild_settings)")
         rows = await cursor.fetchall()

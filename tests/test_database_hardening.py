@@ -25,11 +25,67 @@ async def test_database_migrations_integrity_and_backup(tmp_path: Path) -> None:
     row = await restored.fetchone("SELECT value FROM kv WHERE key = ?", ("health",))
     assert row is not None and row["value"] == "ok"
     migrations = await restored.fetchall("SELECT version FROM schema_migrations ORDER BY version")
-    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    assert [row["version"] for row in migrations] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     await restored.increment_activity(1, "2026-09-24T00:00:00+00:00")
     activity = await restored.list_activity(1)
     assert activity[0]["messages"] == 1
     await restored.close()
+
+
+async def test_old_database_gains_ticket_voice_column(tmp_path: Path) -> None:
+    """Апгрейд существующей базы: колонка появляется, данные не теряются."""
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    try:
+        # Схема до появления голосовых комнат.
+        conn.execute(
+            """
+            CREATE TABLE tickets (
+                ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL UNIQUE,
+                creator_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL,
+                closed_at TEXT,
+                transcript TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO tickets (guild_id, channel_id, creator_id, created_at) "
+            "VALUES (1, 500, 42, '2026-01-01T00:00:00+00:00')"
+        )
+        conn.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        conn.executemany(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, 'now')",
+            [(v,) for v in range(1, 12)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database = Database(str(path))
+    await database.connect()
+    try:
+        columns = {row["name"] for row in await database.fetchall("PRAGMA table_info(tickets)")}
+        assert "voice_channel_id" in columns
+        # Старая строка на месте и не потеряла значений.
+        row = await database.fetchone("SELECT channel_id, creator_id, voice_channel_id FROM tickets")
+        assert row["channel_id"] == 500
+        assert row["creator_id"] == 42
+        assert row["voice_channel_id"] is None
+        versions = [
+            int(r["version"])
+            for r in await database.fetchall("SELECT version FROM schema_migrations ORDER BY version")
+        ]
+        assert 12 in versions
+    finally:
+        await database.close()
 
 
 async def test_restore_validates_and_keeps_previous_db(tmp_path: Path) -> None:

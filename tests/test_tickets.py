@@ -3,6 +3,7 @@
 Транскрипт обязан переживать удаление канала — иначе после закрытия
 историю тикета уже нигде не посмотреть (ключевой фикс веб-панели).
 """
+import asyncio
 import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -66,15 +67,29 @@ def _channel(channel_id: int, *, lines: list[str] | None = None) -> MagicMock:
     return channel
 
 
-def _guild(channels: list[MagicMock]) -> MagicMock:
+def _voice_channel(channel_id: int) -> MagicMock:
+    """Голосовая комната. spec обязателен: сервис проверяет isinstance."""
+    voice = MagicMock(spec=discord.VoiceChannel)
+    voice.id = channel_id
+    voice.name = f"voice-{channel_id}"
+    voice.mention = f"<#{channel_id}>"
+    voice.__str__ = lambda self: self.name
+    voice.delete = AsyncMock()
+    return voice
+
+
+def _guild(channels: list[MagicMock], voice: MagicMock | None = None) -> MagicMock:
     guild = MagicMock()
     guild.id = GILD_ID
     guild.name = "Test Guild"
     guild.default_role = MagicMock(id=0)
     guild.me = MagicMock(id=99)
+    voice = _voice_channel(900) if voice is None else voice
     by_id = {c.id: c for c in channels}
+    by_id[voice.id] = voice
     guild.get_channel.side_effect = lambda cid: by_id.get(cid)
     guild.create_text_channel = AsyncMock(side_effect=lambda **_: None)
+    guild.create_voice_channel = AsyncMock(return_value=voice)
     return guild
 
 
@@ -227,6 +242,100 @@ async def test_create_uses_config_ticket_category_and_support_roles(tmp_path) ->
         overwrite = kwargs["overwrites"][support_role]
         assert overwrite.view_channel is True
         assert overwrite.manage_messages is True
+    finally:
+        await db.close()
+
+
+async def test_create_makes_voice_channel_for_creator_and_support_roles(tmp_path) -> None:
+    tickets, db = await _setup(str(tmp_path))
+    try:
+        category = _CategoryChannel.__new__(_CategoryChannel)
+        category.id = 700
+        support_role = MagicMock(id=701)
+        channel = _channel(560)
+        voice = _voice_channel(901)
+        guild = _guild([channel, category], voice=voice)
+        guild.get_role.return_value = support_role
+        guild.create_text_channel = AsyncMock(return_value=channel)
+        tickets._config = Config(
+            token="x",
+            prefix="!",
+            db_path=os.path.join(str(tmp_path), "bot.db"),
+            log_level="ERROR",
+            status_activity="s",
+            owner_id=None,
+            ticket_category_id=category.id,
+            ticket_support_role_ids=(support_role.id,),
+        )
+
+        creator = _Creator(42, "vasya")
+        result = await tickets.create(guild, creator)
+
+        assert result.error is None
+        assert result.voice_channel is voice
+        guild.create_voice_channel.assert_awaited_once()
+        kwargs = guild.create_voice_channel.call_args.kwargs
+        assert kwargs["category"] is category
+
+        overwrites = kwargs["overwrites"]
+        assert overwrites[guild.default_role].view_channel is False
+        assert overwrites[creator].view_channel is True
+        assert overwrites[creator].connect is True
+        assert overwrites[support_role].view_channel is True
+
+        ticket = await tickets.get_open_ticket(GILD_ID, channel.id)
+        assert ticket["voice_channel_id"] == voice.id
+    finally:
+        await db.close()
+
+
+async def test_close_deletes_voice_channel_with_ticket(tmp_path, monkeypatch) -> None:
+    from app.services import ticket_service as ticket_service_mod
+
+    monkeypatch.setattr(ticket_service_mod, "_DELETE_DELAY_SECONDS", 0.0)
+    tickets, db = await _setup(str(tmp_path))
+    try:
+        channel = _channel(561)
+        voice = _voice_channel(902)
+        guild = _guild([channel], voice=voice)
+        guild.create_text_channel = AsyncMock(return_value=channel)
+
+        assert (await tickets.create(guild, _Creator(42, "vasya"))).error is None
+
+        ticket = await tickets.get_open_ticket(GILD_ID, channel.id)
+        closed = await tickets.close_by_id(guild, ticket["ticket_id"], MagicMock(id=99, mention="<@99>"))
+        assert closed.error is None
+
+        for task in tuple(tickets._delete_tasks):
+            await asyncio.gather(task, return_exceptions=True)
+
+        voice.delete.assert_awaited_once()
+        channel.delete.assert_awaited_once()
+    finally:
+        await db.close()
+
+
+async def test_ticket_survives_voice_creation_failure(tmp_path) -> None:
+    """Нехватка прав или лимит каналов не должны ломать создание тикета."""
+    tickets, db = await _setup(str(tmp_path))
+    try:
+        channel = _channel(562)
+        guild = _guild([channel])
+        guild.create_text_channel = AsyncMock(return_value=channel)
+        guild.create_voice_channel = AsyncMock(
+            side_effect=discord.HTTPException(MagicMock(status=403), "Missing Permissions")
+        )
+
+        result = await tickets.create(guild, _Creator(42, "vasya"))
+
+        assert result.error is None
+        assert result.channel is channel
+        assert result.voice_channel is None
+        ticket = await tickets.get_open_ticket(GILD_ID, channel.id)
+        assert ticket["voice_channel_id"] is None
+        # Пользователь видит предупреждение в интро.
+        embed = channel.send.call_args.kwargs["embed"]
+        assert any("Голосовая" == f.name for f in embed.fields)
     finally:
         await db.close()
 
