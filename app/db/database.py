@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS events (
     start_at          TEXT    NOT NULL,
     image_url         TEXT    NOT NULL DEFAULT '',
     show_not_going    INTEGER NOT NULL DEFAULT 0,
+    mention_role_id   INTEGER,
     creator_id        INTEGER NOT NULL,
     created_at        TEXT    NOT NULL,
     active            INTEGER NOT NULL DEFAULT 1,
@@ -439,6 +440,12 @@ class Database:
             if "voice_channel_id" not in {row[1] for row in columns}:
                 await conn.execute("ALTER TABLE tickets ADD COLUMN voice_channel_id INTEGER")
             await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (12, datetime('now'))")
+        if 13 not in applied:
+            # Роль, которую бот упоминает в карточке ивента при публикации.
+            columns = await conn.execute_fetchall("PRAGMA table_info(events)")
+            if "mention_role_id" not in {row[1] for row in columns}:
+                await conn.execute("ALTER TABLE events ADD COLUMN mention_role_id INTEGER")
+            await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (13, datetime('now'))")
         conn = self.conn
         cursor = await conn.execute("PRAGMA table_info(guild_settings)")
         rows = await cursor.fetchall()

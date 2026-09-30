@@ -45,6 +45,7 @@ _STEP_BRIEFING = "briefing"
 _STEP_START = "start"
 _STEP_IMAGE = "image"
 _STEP_NOT_GOING = "not_going"
+_STEP_MENTION = "mention"
 _STEP_PUBLISH = "publish"
 _STEP_EDIT_FIELD = "edit_field"
 _STEP_EDIT_VALUE = "edit_value"
@@ -157,11 +158,11 @@ class EventTypeView(_ChoiceView):
 
     def _next_step(self, flow: EventFlow) -> tuple[discord.Embed, discord.ui.View | None]:
         del flow
-        return embeds.info("Шаг 3/7 — описание", "Отправьте описание ивента в этот чат."), None
+        return embeds.info("Шаг 3/8 — описание", "Отправьте описание ивента в этот чат."), None
 
 
 class NotGoingView(_ChoiceView):
-    def __init__(self, user_id: int, token: int, service: EventService) -> None:
+    def __init__(self, user_id: int, token: int, service: EventService, guild: discord.Guild) -> None:
         super().__init__(
             user_id,
             token,
@@ -173,17 +174,72 @@ class NotGoingView(_ChoiceView):
             ),
             on_pick=self._store_flag,
         )
+        self._guild = guild
 
     async def _store_flag(self, service: EventService, flow: EventFlow, value: str) -> None:
         del service
         flow.data["show_not_going"] = value == "yes"
-        flow.step = _STEP_PUBLISH
+        flow.step = _STEP_MENTION
 
     def _next_step(self, flow: EventFlow) -> tuple[discord.Embed, discord.ui.View | None]:
-        # Раньше PublishView не отправлялся нигде: шаг 7 упирался в тупик.
+        # Раньше PublishView не отправлялся нигде: шаг упирался в тупик.
         return (
-            embeds.info("Шаг 7/7 — публикация", "Опубликовать ивент?"),
-            PublishView(flow.user_id, self.service.flows.token_for(flow), self.service),
+            embeds.info("Шаг 7/8 — упоминание роли", "Выберите роль, которую бот упомянет в карточке ивента."),
+            MentionRoleView(flow.user_id, self.service.flows.token_for(flow), self.service, self._guild),
+        )
+
+
+class MentionRoleView(_FlowView):
+    """Шаг 7/8: роль для упоминания в карточке ивента."""
+
+    #: Discord разрешает максимум 25 пунктов в одном списке.
+    MAX_OPTIONS = 24
+
+    def __init__(self, user_id: int, token: int, service: EventService, guild: discord.Guild) -> None:
+        super().__init__(user_id, token, service)
+        self._guild = guild
+        pingable = [role for role in guild.roles if role.is_mentionable() and role.id != guild.id]
+        pingable.sort(key=lambda role: (-role.position, role.name.lower()))
+        options = [discord.SelectOption(label=role.name, value=str(role.id)) for role in pingable[: self.MAX_OPTIONS]]
+        options.append(discord.SelectOption(label="Без упоминания", value="none"))
+        select = discord.ui.Select(
+            placeholder="Кого упомянуть в ивенте?",
+            options=options,
+        )
+        _bind(select, self._on_select)
+        self.add_item(select)
+        hidden = max(0, len(pingable) - self.MAX_OPTIONS)
+        self._hint = (
+            f"Показаны первые {self.MAX_OPTIONS} ролей из {len(pingable)}."
+            if hidden
+            else f"Доступно ролей: {len(pingable)}."
+        )
+
+    def summary(self) -> str:
+        return f"{self._hint} Выбрано: без упоминания."
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        flow = await self._require_flow(interaction)
+        if flow is None:
+            return
+        select = self.children[0]
+        assert isinstance(select, discord.ui.Select)
+        value = select.values[0]
+        role = self._guild.get_role(int(value)) if value != "none" else None
+        if value != "none" and role is None:
+            await interaction.response.send_message(
+                embed=embeds.error("Роль не найдена", "Она исчезла или была удалена. Выберите другую."),
+                ephemeral=True,
+            )
+            return
+        flow.data["mention_role_id"] = role.id if role is not None else None
+        flow.step = _STEP_PUBLISH
+        flow.touch()
+        self.stop()
+        chosen = role.mention if role is not None else "без упоминания"
+        await interaction.response.edit_message(
+            embed=embeds.info("Шаг 8/8 — публикация", f"Опубликовать ивент? Упомянуть: {chosen}"),
+            view=PublishView(flow.user_id, self.service.flows.token_for(flow), self.service),
         )
 
 
@@ -291,8 +347,9 @@ async def _publish(service: EventService, interaction: discord.Interaction, flow
             briefing_at=flow.data["briefing_at"],
             start_at=flow.data["start_at"],
             image_url=str(flow.data.get("image_url", "")),
-            show_not_going=bool(flow.data.get("show_not_going", False)),
-        )
+                show_not_going=bool(flow.data.get("show_not_going", False)),
+                mention_role_id=flow.data.get("mention_role_id"),
+            )
     except (EventValidationError, KeyError) as exc:
         service.flows.discard(flow.user_id)
         await interaction.response.edit_message(
@@ -306,8 +363,17 @@ async def _publish(service: EventService, interaction: discord.Interaction, flow
         await interaction.response.edit_message(embed=embeds.error("Ошибка", "Ивент создан, но не найден."), view=None)
         return
     view = EventSignupView(event_id)
+    # Упоминание роли уходит в текст сообщения, а не в embed: так пинг
+    # срабатывает у участников, а в самой карточке роль не дублируется.
+    mention = None
+    if event.get("mention_role_id") is not None:
+        role = channel.guild.get_role(int(event["mention_role_id"]))
+        if role is not None:
+            mention = role.mention
+        else:
+            logger.warning("Роль %s для ивента %s удалена — упоминание пропущено", event["mention_role_id"], event_id)
     try:
-        message = await channel.send(embed=await service.embed(event), view=view)
+        message = await channel.send(content=mention, embed=await service.embed(event), view=view)
     except discord.HTTPException as exc:
         await service.cancel(event_id)
         await interaction.response.edit_message(embed=embeds.error("Не удалось опубликовать", f"Сообщение не отправлено: {exc}"), view=None)
@@ -451,7 +517,7 @@ class EventsCog(ClanCog, name="Events"):
             )
             return
         try:
-            await interaction.user.send(embed=embeds.info("Шаг 1/7 — название", "Отправьте название ивента. Для отмены напишите `отмена`."))
+            await interaction.user.send(embed=embeds.info("Шаг 1/8 — название", "Отправьте название ивента. Для отмены напишите `отмена`."))
         except discord.Forbidden:
             await interaction.response.send_message(
                 embed=embeds.error(
@@ -500,14 +566,14 @@ class EventsCog(ClanCog, name="Events"):
             flow.step = _STEP_TYPE
             flow.touch()
             await reply(
-                embed=embeds.info("Шаг 2/7 — тип", "Выберите тип ивента."),
+                embed=embeds.info("Шаг 2/8 — тип", "Выберите тип ивента."),
                 view=EventTypeView(flow.user_id, self.events.flows.token_for(flow), self.events),
             )
         elif flow.step == _STEP_DESCRIPTION:
             flow.data["description"] = clean_description(text)
             flow.step = _STEP_BRIEFING
             flow.touch()
-            await reply(embed=embeds.info("Шаг 4/7 — время сбора", _DATE_HINT))
+            await reply(embed=embeds.info("Шаг 4/8 — время сбора", _DATE_HINT))
         elif flow.step in (_STEP_BRIEFING, _STEP_START):
             try:
                 moment = parse_event_datetime(text)
@@ -520,7 +586,7 @@ class EventsCog(ClanCog, name="Events"):
                 flow.touch()
                 await reply(
                     embed=embeds.info(
-                        "Шаг 5/7 — время начала",
+                        "Шаг 5/8 — время начала",
                         f"Сбор: **{format_event_datetime(moment)}** (МСК)\n\n{_DATE_HINT.replace('19:00', '20:00')}",
                     )
                 )
@@ -528,7 +594,7 @@ class EventsCog(ClanCog, name="Events"):
                 flow.data["start_at"] = moment
                 flow.step = _STEP_IMAGE
                 flow.touch()
-                await reply(embed=embeds.info("Шаг 6/7 — изображение", "Прикрепите картинку или отправьте `-`."))
+                await reply(embed=embeds.info("Шаг 6/8 — изображение", "Прикрепите картинку или отправьте `-`."))
         elif flow.step == _STEP_IMAGE:
             if text == "-":
                 flow.data["image_url"] = ""
@@ -543,9 +609,18 @@ class EventsCog(ClanCog, name="Events"):
                 return
             flow.step = _STEP_NOT_GOING
             flow.touch()
+            guild = message.guild or self.bot.get_guild(flow.guild_id)
+            if guild is None:
+                await reply(embed=embeds.error("Сервер не найден", "Мастер истёк, начните заново командой /event."))
+                return
             await reply(
-                embed=embeds.info("Шаг 7/7 — кнопка «Не иду»", "Показывать ли вариант отказа в карточке?"),
-                view=NotGoingView(flow.user_id, self.events.flows.token_for(flow), self.events),
+                embed=embeds.info("Шаг 7/8 — кнопка «Не иду»", "Показывать ли вариант отказа в карточке?"),
+                view=NotGoingView(
+                    flow.user_id,
+                    self.events.flows.token_for(flow),
+                    self.events,
+                    guild,
+                ),
             )
 
     async def _handle_edit_value(self, message: discord.Message, flow: EventFlow, text: str) -> None:

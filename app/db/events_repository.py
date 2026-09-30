@@ -10,7 +10,10 @@ from app.types import EventRow, EventSignupRow
 if TYPE_CHECKING:
     from datetime import datetime
 
-SIGNUP_ROLES = ("going_inf", "going_tech", "maybe", "sl", "camera", "not_going")
+#: Актуальные отметки участия. Старые значения (going_inf, going_tech, sl,
+#: camera) остаются в базе от старой схемы со списком и учитываются
+#: как прежние отметки, но новыми выборами больше не ставятся.
+SIGNUP_ROLES = ("going", "maybe", "not_going")
 
 
 class EventsRepository(BaseRepository):
@@ -28,11 +31,12 @@ class EventsRepository(BaseRepository):
         show_not_going: bool,
         creator_id: int,
         created_at: datetime,
+        mention_role_id: int | None = None,
     ) -> int:
         cursor = await self.db.execute(
             "INSERT INTO events (guild_id, channel_id, name, event_type, description, briefing_at, "
-            "start_at, image_url, show_not_going, creator_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "start_at, image_url, show_not_going, creator_id, created_at, mention_role_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 guild_id,
                 channel_id,
@@ -45,6 +49,7 @@ class EventsRepository(BaseRepository):
                 int(show_not_going),
                 creator_id,
                 created_at.isoformat(),
+                mention_role_id,
             ),
         )
         if cursor.lastrowid is None:

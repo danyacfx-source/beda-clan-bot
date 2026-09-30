@@ -27,12 +27,18 @@ WHERE_PLAY_CALLER_ID = "where_play:caller"
 
 #: Варианты участия в ивентах: значение в БД → (подпись, эмодзи).
 EVENT_SIGNUP_OPTIONS: dict[str, tuple[str, str]] = {
+    "going": ("Иду", "✅"),
+    "maybe": ("Возможно", "🤔"),
+    "not_going": ("Не иду", "❌"),
+}
+
+#: Отметки, оставшиеся в базе от старой схемы с выпадающим списком.
+#: Новые отметки сюда не пишутся, но старые карточки должны их показывать.
+EVENT_LEGACY_OPTIONS: dict[str, tuple[str, str]] = {
     "going_inf": ("Иду (пех)", "🪖"),
     "going_tech": ("Иду (тех)", "🚜"),
-    "maybe": ("Возможно", "🤔"),
     "sl": ("SL", "🟠"),
     "camera": ("Камера", "📷"),
-    "not_going": ("Не иду", "❌"),
 }
 
 #: Коллеры карточки «Где играем».
@@ -41,9 +47,9 @@ CALLER_ACTIVITIES: tuple[str, ...] = ("Штурм", "Стройка", "ДРГ", 
 
 
 def _event_id_from_custom_id(custom_id: str) -> int | None:
-    """Достаёт ID ивента из ``event:signup:<id>``."""
+    """Достаёт ID ивента из ``event:signup:<id>`` или ``event:signup:<id>:<роль>``."""
     parts = custom_id.split(":")
-    if len(parts) != 3 or parts[0] != "event" or parts[1] != "signup":
+    if len(parts) not in (3, 4) or parts[0] != "event" or parts[1] != "signup":
         return None
     return int(parts[2]) if parts[2].isdigit() else None
 
@@ -265,70 +271,73 @@ class _PollOptionButton(discord.ui.Button):
         await interaction.followup.send(embed=notice, ephemeral=True)
 
 
-class _EventSignupSelect(discord.ui.Select):
-    """Селект участия в ивентах; ID ивента берётся из custom_id, а не из footer."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            placeholder="Отметить участие…",
-            custom_id=EVENT_SIGNUP_ID,
-            options=[discord.SelectOption(label=label, value=value, emoji=emoji) for value, (label, emoji) in EVENT_SIGNUP_OPTIONS.items()],
+async def _handle_event_signup(interaction: discord.Interaction, role: str) -> None:
+    """Общая обработка кнопок «Иду»/«Не иду» в карточке ивента."""
+    services: Services | None = getattr(interaction.client, "services", None)
+    if services is None:
+        await interaction.response.send_message(embed=embeds.error("Ошибка", "Сервисы недоступны."), ephemeral=True)
+        return
+    event = None
+    custom_id = getattr(interaction.data, "custom_id", "") or ""
+    event_id = _event_id_from_custom_id(custom_id)
+    if event_id is None:
+        await interaction.response.send_message(embed=embeds.error("Ошибка", "Ивент не распознан."), ephemeral=True)
+        return
+    event = await services.events.get(event_id)
+    if event is None:
+        await interaction.response.send_message(embed=embeds.error("Ивент не найден"), ephemeral=True)
+        return
+    if interaction.guild_id is not None and int(event["guild_id"]) != interaction.guild_id:
+        await interaction.response.send_message(
+            embed=embeds.error("Не на этом сервере", "Этот ивент создан на другом сервере."), ephemeral=True
         )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        services: Services | None = getattr(interaction.client, "services", None)
-        if services is None:
-            await interaction.response.send_message(embed=embeds.error("Ошибка", "Сервисы недоступны."), ephemeral=True)
-            return
-        event_id = _event_id_from_custom_id(self.custom_id)
-        if event_id is None:
-            await interaction.response.send_message(embed=embeds.error("Ошибка", "Ивент не распознан."), ephemeral=True)
-            return
-        event = await services.events.get(event_id)
-        if event is None:
-            await interaction.response.send_message(embed=embeds.error("Ивент не найден"), ephemeral=True)
-            return
-        if interaction.guild_id is not None and int(event["guild_id"]) != interaction.guild_id:
-            await interaction.response.send_message(
-                embed=embeds.error("Не на этом сервере", "Этот ивент создан на другом сервере."), ephemeral=True
-            )
-            return
-        if not event["active"]:
-            await interaction.response.send_message(embed=embeds.warning("Ивент отменён"), ephemeral=True)
-            return
-        if not self.values:
-            return
-        role = self.values[0]
+        return
+    if not event["active"]:
+        await interaction.response.send_message(embed=embeds.warning("Ивент отменён"), ephemeral=True)
+        return
+    try:
+        added = await services.events.set_signup(event, interaction.user.id, role)
+    except ValueError as exc:
+        await interaction.response.send_message(embed=embeds.error("Не удалось", str(exc)), ephemeral=True)
+        return
+    label = EVENT_SIGNUP_OPTIONS[role][0]
+    notice = (
+        embeds.success("Отметка принята", f"Ваш статус: **{label}**.")
+        if added
+        else embeds.info("Отметка снята", f"Статус **{label}** снят.")
+    )
+    await interaction.response.send_message(embed=notice, ephemeral=True)
+    # Счётчики в карточке должны отражать только что записанную отметку,
+    # поэтому перечитываем ивент, а не переиспользуем прочитанный ранее.
+    fresh = await services.events.get(int(event["id"]))
+    if fresh is not None and interaction.message is not None:
         try:
-            added = await services.events.set_signup(event, interaction.user.id, role)
-        except ValueError as exc:
-            await interaction.response.send_message(embed=embeds.error("Не удалось", str(exc)), ephemeral=True)
-            return
-        label = EVENT_SIGNUP_OPTIONS[role][0]
-        notice = (
-            embeds.success("Отметка принята", f"Ваш статус: **{label}**.")
-            if added
-            else embeds.info("Отметка снята", f"Статус **{label}** снят.")
-        )
-        await interaction.response.send_message(embed=notice, ephemeral=True)
-        # Счётчики в карточке должны отражать только что записанную отметку,
-        # поэтому перечитываем ивент, а не переиспользуем прочитанный ранее.
-        fresh = await services.events.get(int(event["id"]))
-        if fresh is not None and interaction.message is not None:
-            try:
-                await interaction.message.edit(embed=await services.events.embed(fresh))
-            except discord.HTTPException:
-                pass
+            await interaction.message.edit(embed=await services.events.embed(fresh))
+        except discord.HTTPException:
+            pass
 
 
 class EventSignupView(discord.ui.View):
-    """Устойчивый селект участия в ивентах (работает после рестарта)."""
+    """Устойчивые кнопки участия в ивентах (работают после рестарта)."""
 
     def __init__(self, event_id: int) -> None:
         super().__init__(timeout=None)
-        select = _EventSignupSelect()
-        select.custom_id = f"{EVENT_SIGNUP_ID}:{event_id}"
-        self.add_item(select)
+        for value, (label, emoji) in EVENT_SIGNUP_OPTIONS.items():
+            style = discord.ButtonStyle.danger if value == "not_going" else discord.ButtonStyle.success
+            button = discord.ui.Button(
+                label=label,
+                style=style,
+                custom_id=f"{EVENT_SIGNUP_ID}:{event_id}:{value}",
+                emoji=emoji,
+            )
+            button.callback = self._make(value)  # type: ignore[method-assign]
+            self.add_item(button)
+
+    def _make(self, role: str) -> Callable[[discord.Interaction], Awaitable[None]]:
+        async def callback(interaction: discord.Interaction) -> None:
+            await _handle_event_signup(interaction, role)
+
+        return callback
 
 
 class WherePlayCallerView(discord.ui.View):

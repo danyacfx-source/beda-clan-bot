@@ -125,9 +125,9 @@ CREATE TABLE IF NOT EXISTS events (
     id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL, message_id BIGINT,
     name TEXT NOT NULL, event_type TEXT NOT NULL DEFAULT 'freeform', description TEXT NOT NULL DEFAULT '',
     briefing_at TEXT NOT NULL, start_at TEXT NOT NULL, image_url TEXT NOT NULL DEFAULT '',
-    show_not_going INTEGER NOT NULL DEFAULT 0, creator_id BIGINT NOT NULL, created_at TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1, reminded_briefing INTEGER NOT NULL DEFAULT 0,
-    reminded_start INTEGER NOT NULL DEFAULT 0
+      show_not_going INTEGER NOT NULL DEFAULT 0, creator_id BIGINT NOT NULL, created_at TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1, reminded_briefing INTEGER NOT NULL DEFAULT 0,
+      reminded_start INTEGER NOT NULL DEFAULT 0, mention_role_id BIGINT
 );
 CREATE TABLE IF NOT EXISTS event_signup (
     event_id BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -175,8 +175,9 @@ CREATE INDEX IF NOT EXISTS idx_dossiers_status ON dossiers(status);
 -- Схема применяется только на создание таблиц, поэтому существующей базе
 -- колонку надо добавить отдельно: иначе бот упадёт на INSERT.
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS voice_channel_id BIGINT;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS mention_role_id BIGINT;
 INSERT INTO schema_migrations(version, applied_at)
-SELECT version, CURRENT_TIMESTAMP::text FROM generate_series(1, 12) AS version
+SELECT version, CURRENT_TIMESTAMP::text FROM generate_series(1, 13) AS version
 ON CONFLICT (version) DO NOTHING;
 """
 

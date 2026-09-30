@@ -5,9 +5,16 @@ import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import discord
 import pytest
 
-from app.cogs.events.events import EventTypeView, NotGoingView, PublishView
+from app.cogs.events.events import (
+    EventTypeView,
+    MentionRoleView,
+    NotGoingView,
+    PublishView,
+)
+from app.core.views import EVENT_LEGACY_OPTIONS, EVENT_SIGNUP_OPTIONS
 from app.db.database import Database
 from app.db.events_repository import SIGNUP_ROLES, EventsRepository
 from app.services.event_service import (
@@ -124,22 +131,66 @@ async def test_signup_sets_toggles_and_splits_going(service):
     event_id = await _make_event(service)
     event = await service.get(event_id)
 
-    assert await service.set_signup(event, 11, "going_inf") is True
-    assert await service.set_signup(event, 12, "going_tech") is True
-    assert await service.set_signup(event, 13, "not_going") is True
-    assert await service.set_signup(event, 11, "going_inf") is False  # повтор снимает
+    assert await service.set_signup(event, 11, "going") is True
+    assert await service.set_signup(event, 12, "not_going") is True
+    assert await service.set_signup(event, 13, "going") is True
+    assert await service.set_signup(event, 13, "going") is False  # повтор снимает
 
     counts = await service.signup_counts(event_id)
     # Счётчики есть для всех ролей, чтобы карточка не «прыгала» при первом отклике.
     assert set(counts) == set(SIGNUP_ROLES)
-    assert counts["going_inf"] == []
-    assert counts["going_tech"] == [12]
-    assert counts["not_going"] == [13]
-    assert 11 not in (await service.participants(event_id))
-    assert sorted(await service.participants(event_id)) == [12]
+    assert counts["going"] == [11]
+    assert counts["not_going"] == [12]
+    assert 13 not in (await service.participants(event_id))
+    assert sorted(await service.participants(event_id)) == [11]
 
     with pytest.raises(EventValidationError):
         await service.set_signup(event, 11, "неизвестный")
+
+
+async def test_signup_rejects_removed_legacy_roles(service):
+    event_id = await _make_event(service)
+    event = await service.get(event_id)
+    for legacy in ("going_inf", "going_tech", "sl", "camera"):
+        with pytest.raises(EventValidationError):
+            await service.set_signup(event, 11, legacy)
+
+
+async def test_signup_options_and_repo_roles_stay_in_sync():
+    assert set(SIGNUP_ROLES) == set(EVENT_SIGNUP_OPTIONS) == {"going", "maybe", "not_going"}
+    assert not set(SIGNUP_ROLES) & set(EVENT_LEGACY_OPTIONS)
+
+
+async def test_legacy_marks_are_still_counted_and_shown(db, service):
+    event_id = await _make_event(service)
+    # Снятые варианты репозиторий больше не принимает, поэтому легаси пишем
+    # прямо в SQL — так выглядит база, созданная до перехода на кнопки.
+    for user_id, role in ((21, "going_inf"), (22, "going_tech"), (23, "camera"), (24, "not_going")):
+        await db.execute(
+            "INSERT INTO event_signup (event_id, user_id, role, updated_at) VALUES (?, ?, ?, ?)",
+            (event_id, user_id, role, datetime.now(UTC).isoformat()),
+        )
+
+    counts = await service.signup_counts(event_id)
+    assert counts["going_inf"] == [21]
+    assert counts["going"] == []
+
+    embed = await service.embed(await service.get(event_id))
+    rendered = "\n".join(f.name for f in embed.fields)
+    assert "Прежние отметки (3)" in rendered
+    # Прежние «иду»-отметки остаются участниками: они положительные,
+    # значит должны попадать в напоминания. А «Не иду» — нет.
+    assert sorted(await service.participants(event_id)) == [21, 22, 23]
+
+
+async def test_maybe_is_selectable_again(service):
+    event_id = await _make_event(service)
+    event = await service.get(event_id)
+    assert await service.set_signup(event, 31, "maybe") is True
+    counts = await service.signup_counts(event_id)
+    assert counts["maybe"] == [31]
+    # «Возможно» не отказ: участником сбор считается.
+    assert await service.participants(event_id) == [31]
 
 
 async def test_signup_blocked_after_cancel(service):
@@ -148,7 +199,7 @@ async def test_signup_blocked_after_cancel(service):
     cancelled = await service.get(event_id)
     assert cancelled is not None and cancelled["active"] == 0
     with pytest.raises(EventValidationError):
-        await service.set_signup(cancelled, 11, "maybe")
+        await service.set_signup(cancelled, 11, "going")
 
 
 # --- редактирование ---
@@ -295,6 +346,33 @@ class _FakeInteraction:
         return [name for name, _ in self.calls]
 
 
+class _FakeRole:
+    def __init__(self, role_id: int, name: str, position: int) -> None:
+        self.id = role_id
+        self.name = name
+        self.position = position
+        self.mention = f"<@&{role_id}>"
+
+    def is_mentionable(self) -> bool:
+        return True
+
+
+class _FakeGuild:
+    def __init__(self, roles: list[_FakeRole]) -> None:
+        self.roles = roles
+        self.id = 999
+        self.mentionable = roles
+
+    def get_role(self, role_id: int):
+        return next((role for role in self.roles if role.id == role_id), None)
+
+
+def _fake_guild(role_count: int = 3) -> _FakeGuild:
+    roles = [_FakeRole(1000 + i, f"Роль {i}", i) for i in range(role_count)]
+    roles.append(_FakeRole(999, "@everyone", -1))
+    return _FakeGuild(roles)
+
+
 async def test_type_button_answers_and_advances_step(service):
     flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="type"))
     view = EventTypeView(7, service.flows.token_for(flow), service)
@@ -307,17 +385,62 @@ async def test_type_button_answers_and_advances_step(service):
     assert flow.step == "description"
 
 
-async def test_not_going_button_hands_over_to_publish_step(service):
+async def test_not_going_button_hands_over_to_mention_step(service):
     flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="not_going"))
-    view = NotGoingView(7, service.flows.token_for(flow), service)
+    view = NotGoingView(7, service.flows.token_for(flow), service, _fake_guild())
     interaction = _FakeInteraction(7)
 
     await view.children[0].callback(interaction)
 
     assert interaction.names == ["edit"]
+    assert flow.step == "mention"
+    # Шаг не должен упираться в тупик: дальше идёт выбор роли для упоминания.
+    next_view = interaction.calls[0][1]["view"]
+    assert isinstance(next_view, MentionRoleView)
+
+
+async def test_mention_role_select_stores_choice_and_hands_to_publish(service):
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="mention"))
+    guild = _fake_guild()
+    view = MentionRoleView(7, service.flows.token_for(flow), service, guild)
+    interaction = _FakeInteraction(7)
+
+    select = view.children[0]
+    assert isinstance(select, discord.ui.Select)
+    select._values = [str(guild.mentionable[0].id)]
+    await select.callback(interaction)
+
+    assert interaction.names == ["edit"]
     assert flow.step == "publish"
-    # Шаг 7 раньше упирался в тупик: PublishView не отправлялся нигде.
+    assert flow.data["mention_role_id"] == guild.mentionable[0].id
     assert isinstance(interaction.calls[0][1]["view"], PublishView)
+
+
+async def test_mention_role_none_disables_ping(service):
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="mention"))
+    guild = _fake_guild()
+    view = MentionRoleView(7, service.flows.token_for(flow), service, guild)
+    interaction = _FakeInteraction(7)
+
+    select = view.children[0]
+    assert isinstance(select, discord.ui.Select)
+    select._values = ["none"]
+    await select.callback(interaction)
+
+    assert flow.data["mention_role_id"] is None
+    assert isinstance(interaction.calls[0][1]["view"], PublishView)
+
+
+async def test_mention_role_list_caps_at_discord_limit(service):
+    flow = service.flows.begin(EventFlow(user_id=7, guild_id=100, channel_id=200, step="mention"))
+    guild = _fake_guild(role_count=40)
+    view = MentionRoleView(7, service.flows.token_for(flow), service, guild)
+
+    select = view.children[0]
+    assert isinstance(select, discord.ui.Select)
+    # Discord разрешает не больше 25 пунктов: 24 роли плюс «Без упоминания».
+    assert len(select.options) == 25
+    assert select.options[-1].value == "none"
 
 
 async def test_expired_flow_answers_instead_of_staying_silent(service):

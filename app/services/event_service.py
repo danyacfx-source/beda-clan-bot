@@ -23,7 +23,7 @@ import discord
 
 from app.core import embeds
 from app.core.base import BaseService
-from app.core.views import EVENT_SIGNUP_OPTIONS
+from app.core.views import EVENT_LEGACY_OPTIONS, EVENT_SIGNUP_OPTIONS
 from app.db.events_repository import SIGNUP_ROLES
 from app.types import EventRow
 from app.utils.format import truncate
@@ -243,7 +243,10 @@ class EventService(BaseService["EventsRepository"]):
         start_at: datetime,
         image_url: str,
         show_not_going: bool,
+        mention_role_id: int | None = None,
     ) -> int:
+        if mention_role_id is not None and mention_role_id <= 0:
+            raise EventValidationError("Упомянуть роль не получилось: роль не найдена.")
         if event_type not in EVENT_TYPES:
             raise EventValidationError("Неизвестный тип события.")
         now = datetime.now(UTC)
@@ -260,6 +263,7 @@ class EventService(BaseService["EventsRepository"]):
             show_not_going=show_not_going,
             creator_id=creator_id,
             created_at=now,
+            mention_role_id=mention_role_id,
         )
 
     async def get(self, event_id: int) -> EventRow | None:
@@ -394,6 +398,17 @@ class EventService(BaseService["EventsRepository"]):
             sign_label, sign_emoji = EVENT_SIGNUP_OPTIONS[role]
             value = "\n".join(f"<@{uid}>" for uid in users) or "—"
             embed.add_field(name=f"{sign_emoji} {sign_label} ({len(users)})", value=truncate(value, 1000), inline=True)
+        legacy = [(label, emoji, counts.get(key, [])) for key, (label, emoji) in EVENT_LEGACY_OPTIONS.items()]
+        legacy = [item for item in legacy if item[2]]
+        if legacy:
+            total = sum(len(users) for _, _, users in legacy)
+            legend = ", ".join(f"{emoji} {label}" for label, emoji, _ in legacy)
+            mentions = "\n".join(f"<@{uid}>" for _, _, users in legacy for uid in users)
+            embed.add_field(
+                name=f"📜 Прежние отметки ({total})",
+                value=truncate(f"{legend}\n{mentions}", 1000),
+                inline=False,
+            )
         embed.add_field(name="Создал", value=f"<@{event['creator_id']}>", inline=False)
         if event["image_url"]:
             embed.set_image(url=str(event["image_url"]))

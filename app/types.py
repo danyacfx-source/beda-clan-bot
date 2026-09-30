@@ -109,6 +109,7 @@ class EventRow(TypedDict):
     start_at: str
     image_url: str
     show_not_going: int
+    mention_role_id: int | None
     creator_id: int
     created_at: str
     active: int
