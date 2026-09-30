@@ -1,8 +1,12 @@
 """Регрессионные тесты интерактивных представлений."""
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from app.core.views import ConfirmView, _handle_event_signup
+import discord
+
+from app.core.loader import _migrate_event_cards
+from app.core.views import EVENT_SIGNUP_OPTIONS, ConfirmView, EventSignupView, _handle_event_signup
 
 
 class _FakeResponse:
@@ -76,3 +80,81 @@ async def test_confirm_view_disables_all_controls_without_nonexistent_api() -> N
 
     assert view.children
     assert all(getattr(item, "disabled", False) for item in view.children)
+
+
+class _FakeMessage:
+    def __init__(self, message_id: int, fail: Exception | None = None) -> None:
+        self.id = message_id
+        self.edits: list[dict] = []
+        self._fail = fail
+
+    async def edit(self, **kwargs) -> None:
+        if self._fail is not None:
+            raise self._fail
+        self.edits.append(kwargs)
+
+
+class _FakeChannel:
+    def __init__(self, message: _FakeMessage) -> None:
+        self._message = message
+
+    async def fetch_message(self, message_id: int) -> _FakeMessage:
+        return self._message
+
+
+class _FakeEventsService:
+    def __init__(self) -> None:
+        self.embedded: list[dict] = []
+
+    async def embed(self, event: dict) -> discord.Embed:
+        self.embedded.append(event)
+        return discord.Embed(title=str(event["name"]))
+
+
+def _event_row(**overrides) -> dict:
+    row = {
+        "id": 42,
+        "guild_id": 100,
+        "channel_id": 200,
+        "message_id": 300,
+        "name": "Тренировка",
+    }
+    row.update(overrides)
+    return row
+
+
+async def test_migrate_event_cards_replaces_legacy_select_with_buttons() -> None:
+    """Старые карточки хранят селект, а discord.py ищет view по custom_id.
+
+    Без перерисовки меню на таких сообщениях не реагирует вовсе.
+    """
+    message = _FakeMessage(300)
+    events_service = _FakeEventsService()
+    services = SimpleNamespace(events=events_service)
+    bot = SimpleNamespace(get_channel=lambda cid: _FakeChannel(message))
+
+    await _migrate_event_cards(bot, services, [_event_row()])
+
+    assert len(message.edits) == 1
+    view = message.edits[0]["view"]
+    assert isinstance(view, EventSignupView)
+    # Набор компонентов пересобран: селета нет, кнопок столько же, сколько статусов.
+    assert all(isinstance(item, discord.ui.Button) for item in view.children)
+    assert len(view.children) == len(EVENT_SIGNUP_OPTIONS)
+
+
+async def test_migrate_event_cards_survives_deleted_message() -> None:
+    """Удалённое вручную сообщение не должно ронять миграцию целиком."""
+    good = _FakeMessage(300)
+    gone = _FakeMessage(999, fail=discord.NotFound(MagicMock(status=404), "Unknown Message"))
+    channels = {200: _FakeChannel(gone), 201: _FakeChannel(good)}
+    events_service = _FakeEventsService()
+    services = SimpleNamespace(events=events_service)
+    bot = SimpleNamespace(get_channel=lambda cid: channels[cid])
+
+    await _migrate_event_cards(
+        bot, services, [_event_row(message_id=999), _event_row(id=43, channel_id=201, message_id=300)]
+    )
+
+    # Удалённое пропустили, а следующее всё равно перерисовали.
+    assert len(good.edits) == 1

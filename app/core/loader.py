@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import logging
@@ -22,6 +23,7 @@ from app.cogs import COGS_PACKAGE
 if TYPE_CHECKING:
     from app.core.bot import ClanBot
     from app.services import Services
+    from app.types import EventRow
 
 logger = logging.getLogger("bot")
 
@@ -130,6 +132,48 @@ async def load_cogs(bot: ClanBot) -> list[str]:
     return loaded
 
 
+async def _migrate_event_cards(bot: ClanBot, services: Services, events: list[EventRow]) -> None:
+    """Перерисовывает карточки ивентов, созданных до кнопок участия.
+
+    Старый селект меняем на кнопки «Иду / Возможно / Не иду», иначе он не
+    реагирует: discord.py сопоставляет компонент с view по custom_id, а он
+    у старых сообщений другой. Идёт в фоне, чтобы не задерживать старт бота.
+    """
+    import discord
+
+    from app.core.views import EventSignupView
+
+    migrated = skipped = failed = 0
+    for event in events:
+        try:
+            channel = bot.get_channel(int(event["channel_id"]))
+            if channel is None:
+                channel = await bot.fetch_channel(int(event["channel_id"]))
+            message = await channel.fetch_message(int(event["message_id"]))
+            # view= пересобирает набор компонентов целиком, embed нужен, чтобы
+            # Discord не заблокировал правку сообщения.
+            embed = await services.events.embed(event)
+            await message.edit(embed=embed, view=EventSignupView(int(event["id"])))
+            migrated += 1
+        except discord.NotFound:
+            # Сообщение удалили вручную: компоненты восстанавливать некуда.
+            skipped += 1
+            continue
+        except discord.Forbidden:
+            failed += 1
+            logger.warning("Нет прав перерисовать карточку ивента #%s", event["id"])
+            continue
+        except Exception:
+            failed += 1
+            logger.exception("Не удалось перерисовать карточку ивента #%s", event["id"])
+        # Пауза между правками, чтобы не упереться в лимит запросов Discord.
+        await asyncio.sleep(1.5)
+
+    logger.info(
+        "Карточки ивентов перерисованы: %d, пропущено %d, с ошибкой %d", migrated, skipped, failed
+    )
+
+
 async def register_persistent_views(bot: ClanBot) -> None:
     """Регистрирует кнопки тикетов, опросов, розыгрышей, ивентов и личных дел, которые переживают рестарт бота."""
     import json
@@ -167,12 +211,21 @@ async def register_persistent_views(bot: ClanBot) -> None:
             poll_count += 1
         except Exception:
             logger.exception("Не удалось зарегистрировать view опроса #%s", poll["id"])
+    stale_events = []
     for event in await services.events.active_with_message():
         try:
             bot.add_view(EventSignupView(int(event["id"])), message_id=event["message_id"])
             event_count += 1
+            stale_events.append(event)
         except Exception:
             logger.exception("Не удалось зарегистрировать view ивента #%s", event["id"])
+
+    # Старые карточки ивентов в Discord всё ещё хранят селект с custom_id
+    # ``event:signup:<id>``, а новые кнопки получили ``event:signup:<id>:<статус>``.
+    # discord.py ищет view по паре (тип компонента, custom_id), поэтому на таких
+    # сообщениях старое меню остаётся мёртвым, пока их не перерисовать.
+    if stale_events:
+        asyncio.create_task(_migrate_event_cards(bot, services, stale_events))
 
     logger.info(
         "Persistent views: тикеты 2, где играем 1, личные дела 2, розыгрыши %d, опросы %d, ивенты %d, всего %d",
