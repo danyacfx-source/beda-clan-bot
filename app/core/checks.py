@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+logger = logging.getLogger("bot.checks")
 
 
 def bot_has_permissions(**perms: bool):
@@ -36,6 +40,37 @@ def is_owner() -> app_commands.check:
         if owner_id and interaction.user.id == owner_id:
             return True
         raise commands.NotOwner("Эта команда доступна владельцу бота.")
+
+    return app_commands.check(predicate)
+
+
+def requires_role(attribute: str) -> app_commands.check:
+    """Пропускает только участников с ролями, перечисленными в конфиге.
+
+    Администраторы проходят всегда: иначе ограничение по конкретной роли
+    заперло бы снаружи команды того, кто может её настроить. Пустой список
+    в конфиге означает «без ограничений», чтобы опечатка в настройке не
+    закрыла команду целиком.
+    """
+    async def predicate(interaction: discord.Interaction) -> bool:
+        config = getattr(interaction.client, "config", None)
+        role_ids = tuple(getattr(config, attribute, ()) or ()) if config is not None else ()
+        if not role_ids or interaction.guild is None:
+            return True
+        member = interaction.user
+        if member.guild_permissions.administrator:
+            return True
+        if {role.id for role in getattr(member, "roles", ())} & set(role_ids):
+            return True
+        names = []
+        for role_id in role_ids:
+            role = interaction.guild.get_role(role_id)
+            if role is None:
+                logger.warning("Роль %s из %s не найдена на сервере %s", role_id, attribute, interaction.guild_id)
+                continue
+            names.append(discord.utils.escape_markdown(role.name))
+        hint = ", ".join(names) if names else "роль в конфигурации не найдена на сервере"
+        raise app_commands.CheckFailure(f"Команда доступна только участникам с ролями: {hint}.")
 
     return app_commands.check(predicate)
 

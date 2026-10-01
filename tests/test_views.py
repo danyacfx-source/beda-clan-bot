@@ -1,12 +1,22 @@
 """Регрессионные тесты интерактивных представлений."""
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import discord
+import pytest
+from discord import app_commands
 
+from app.core import checks
 from app.core.loader import _migrate_event_cards
-from app.core.views import EVENT_SIGNUP_OPTIONS, ConfirmView, EventSignupView, _handle_event_signup
+from app.core.views import (
+    EVENT_SIGNUP_OPTIONS,
+    ConfirmView,
+    EventSignupView,
+    _caller_room_access,
+    _handle_event_signup,
+)
 
 
 class _FakeResponse:
@@ -71,6 +81,165 @@ async def test_event_signup_survives_missing_custom_id_data() -> None:
     await _handle_event_signup(interaction, "going")
 
     assert calls == ["Ошибка"]
+
+
+@dataclass(frozen=True)
+class _FakeOverwriteTarget:
+    """Хешируемая замена роли/участника: ключ в overwrites."""
+
+    id: int
+    name: str = ""
+
+
+@dataclass
+class _FakeOverwriteGuild:
+    id: int
+    default_role: _FakeOverwriteTarget
+    me: _FakeOverwriteTarget
+    roles: dict[int, _FakeOverwriteTarget]
+
+    def get_role(self, role_id: int) -> _FakeOverwriteTarget | None:
+        return self.roles.get(role_id)
+
+
+async def test_caller_room_is_closed_for_everyone_and_open_for_allowed_roles() -> None:
+    """@everyone не должен видеть и подключаться, иначе комната открыта всем."""
+    squad_a = _FakeOverwriteTarget(id=1048020872667091035, name="Squad **A**")
+    squad_b = _FakeOverwriteTarget(id=1545083746988851261, name="Squad B")
+    everyone = _FakeOverwriteTarget(id=555, name="@everyone")
+    bot_member = _FakeOverwriteTarget(id=999, name="BEDA")
+    guild = _FakeOverwriteGuild(
+        id=100, default_role=everyone, me=bot_member, roles={squad_a.id: squad_a, squad_b.id: squad_b}
+    )
+    config = SimpleNamespace(where_play_caller_role_ids=(1048020872667091035, 1545083746988851261))
+
+    allowed, overwrites = _caller_room_access(guild, config)
+
+    by_target = {target: ow for target, ow in overwrites}
+    assert {role.id for role in allowed} == {squad_a.id, squad_b.id}
+    assert by_target[everyone].view_channel is False
+    assert by_target[everyone].connect is False
+    for role in (squad_a, squad_b):
+        assert by_target[role].view_channel is True
+        assert by_target[role].connect is True
+    # Боту нужны права, иначе он не сможет перенести участника и убрать комнату.
+    assert by_target[bot_member].connect is True
+    assert by_target[bot_member].move_members is True
+    assert by_target[bot_member].manage_channels is True
+
+
+async def test_caller_room_ignores_roles_missing_on_guild() -> None:
+    """Роль из конфига могла быть удалена: тогда её нельзя ставить в overwrites."""
+    squad_a = _FakeOverwriteTarget(id=1048020872667091035, name="Squad A")
+    guild = _FakeOverwriteGuild(
+        id=100,
+        default_role=_FakeOverwriteTarget(id=555, name="@everyone"),
+        me=_FakeOverwriteTarget(id=999, name="BEDA"),
+        roles={squad_a.id: squad_a},
+    )
+    config = SimpleNamespace(where_play_caller_role_ids=(1048020872667091035, 1545083746988851261))
+
+    allowed, overwrites = _caller_room_access(guild, config)
+
+    assert [role.id for role in allowed] == [squad_a.id]
+    # @everyone закрыт, бот разрешён, найденная роль разрешена.
+    assert len(overwrites) == 3
+
+
+async def test_caller_room_stays_open_when_no_roles_configured() -> None:
+    """Пустой конфиг не должен ломать кнопку: канал создаётся как раньше."""
+    guild = _FakeOverwriteGuild(
+        id=100,
+        default_role=_FakeOverwriteTarget(id=555, name="@everyone"),
+        me=_FakeOverwriteTarget(id=999, name="BEDA"),
+        roles={},
+    )
+    config = SimpleNamespace(where_play_caller_role_ids=())
+
+    allowed, overwrites = _caller_room_access(guild, config)
+
+    assert allowed == []
+    assert overwrites == []
+
+
+@dataclass
+class _FakeCheckMember:
+    """Подделка участника для проверок доступа."""
+
+    id: int
+    guild_permissions: SimpleNamespace
+    roles: tuple = ()
+
+
+def _check_interaction(member, config, guild_id: int = 100) -> SimpleNamespace:
+    squad = _FakeOverwriteTarget(id=1048020872667091035, name="Squad **A**")
+    guild = SimpleNamespace(
+        id=guild_id,
+        default_role=_FakeOverwriteTarget(id=555, name="@everyone"),
+        me=_FakeOverwriteTarget(id=999, name="BEDA"),
+        get_role=lambda rid: squad if rid == squad.id else None,
+    )
+    return SimpleNamespace(
+        client=SimpleNamespace(config=config),
+        guild=guild,
+        guild_id=guild_id,
+        user=member,
+    )
+
+
+async def _run_check(member, config) -> bool:
+    """Гоняет предикат из checks.requires_role.
+
+    app_commands.check не хранит функцию в себе: он вешает её на
+    декорируемую функцию в __discord_app_commands_checks__.
+    """
+
+    async def command(interaction) -> None:  # noqa: ARG001
+        pass
+
+    checks.requires_role("where_play_command_role_ids")(command)
+    (predicate,) = command.__discord_app_commands_checks__
+    return await predicate(_check_interaction(member, config))
+
+
+async def test_where_play_command_allowed_for_configured_role() -> None:
+    config = SimpleNamespace(where_play_command_role_ids=(1048020872667091035,))
+    member = _FakeCheckMember(
+        id=1,
+        guild_permissions=SimpleNamespace(administrator=False),
+        roles=(_FakeOverwriteTarget(id=1048020872667091035, name="Squad A"),),
+    )
+
+    assert await _run_check(member, config) is True
+
+
+async def test_where_play_command_denies_outsider() -> None:
+    config = SimpleNamespace(where_play_command_role_ids=(1048020872667091035,))
+    member = _FakeCheckMember(
+        id=2,
+        guild_permissions=SimpleNamespace(administrator=False),
+        roles=(_FakeOverwriteTarget(id=1545083746988851261, name="Squad B"),),
+    )
+
+    with pytest.raises(app_commands.CheckFailure) as exc:
+        await _run_check(member, config)
+    # Название роли экранируется, иначе «**» в имени ломает разметку.
+    assert "Squad \\*\\*A\\*\\*" in str(exc.value)
+
+
+async def test_where_play_command_allows_administrator_without_role() -> None:
+    """Иначе ограничение по роли заперло бы снаружи того, кто может настроить."""
+    config = SimpleNamespace(where_play_command_role_ids=(1048020872667091035,))
+    member = _FakeCheckMember(id=3, guild_permissions=SimpleNamespace(administrator=True), roles=())
+
+    assert await _run_check(member, config) is True
+
+
+async def test_where_play_command_open_when_config_empty() -> None:
+    config = SimpleNamespace(where_play_command_role_ids=())
+    member = _FakeCheckMember(id=4, guild_permissions=SimpleNamespace(administrator=False), roles=())
+
+    assert await _run_check(member, config) is True
 
 
 async def test_confirm_view_disables_all_controls_without_nonexistent_api() -> None:

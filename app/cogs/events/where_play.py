@@ -13,7 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from app.core import embeds
+from app.core import checks, embeds
 from app.core.base import ClanCog
 from app.services.where_play_service import TEAMS, WherePlayError
 
@@ -106,6 +106,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
     )
     @app_commands.choices(team=[app_commands.Choice(name=name, value=name) for name in TEAMS])
     @app_commands.guild_only()
+    @checks.requires_role("where_play_command_role_ids")
     async def where_play(self, interaction: discord.Interaction, server: str, team: str) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = await self.where_play.row(interaction.guild_id)

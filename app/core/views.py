@@ -459,6 +459,45 @@ class _CallerActivityView(discord.ui.View):
         await _join_caller(self.services, interaction, select.values[0])
 
 
+def _caller_room_access(
+    guild: discord.Guild, config: Any
+) -> tuple[list[discord.Role], list[tuple[Any, discord.PermissionOverwrite]]]:
+    """Роли, которым открыта комната коллера, и права на её создание.
+
+    Без явного запрета для @everyone канал наследует права категории, и в
+    комнату попадёт любой, кто её видит. Если роли не заданы или не найдены,
+    overwrites пустые: канал создаётся как раньше, без ограничения.
+    """
+    allowed: list[discord.Role] = []
+    for role_id in config.where_play_caller_role_ids:
+        role = guild.get_role(role_id)
+        if role is None:
+            logger.warning("Роль %s для комнаты коллера не найдена на сервере %s", role_id, guild.id)
+            continue
+        allowed.append(role)
+
+    if not allowed:
+        logger.warning(
+            "Комната коллера на сервере %s создаётся без ограничения доступа: "
+            "ни одна роль из WHERE_PLAY_CALLER_ROLE_IDS не найдена",
+            guild.id,
+        )
+        return [], []
+
+    overwrites: list[tuple[Any, discord.PermissionOverwrite]] = [
+        (guild.default_role, discord.PermissionOverwrite(view_channel=False, connect=False, speak=False)),
+        (
+            guild.me,
+            discord.PermissionOverwrite(
+                view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True
+            ),
+        ),
+    ]
+    for role in allowed:
+        overwrites.append((role, discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)))
+    return allowed, overwrites
+
+
 async def _join_caller(services: Services, interaction: discord.Interaction, activity: str) -> None:
     if activity not in CALLER_ACTIVITIES or interaction.guild is None:
         await interaction.response.send_message(embed=embeds.error("Неверный выбор", "Выберите деятельность из списка."), ephemeral=True)
@@ -494,9 +533,29 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
             except discord.HTTPException:
                 pass
     else:
+        allowed_roles, overwrites = _caller_room_access(interaction.guild, interaction.client.config)
+        if allowed_roles:
+            # Комната закрыта по ролям, поэтому без нужной роли в неё не войти,
+            # и бот не сможет перенести туда нажавшего. Лучше отказать сразу,
+            # чем создать комнату, в которую никто не сможет зайти.
+            member_role_ids = {role.id for role in interaction.user.roles}
+            if not any(role.id in member_role_ids for role in allowed_roles):
+                names = ", ".join(discord.utils.escape_markdown(role.name) for role in allowed_roles)
+                await interaction.response.send_message(
+                    embed=embeds.error(
+                        "Нет доступа к комнате",
+                        f"Комната коллера доступна только участникам с ролями: {names}.",
+                    ),
+                    ephemeral=True,
+                )
+                return
         try:
             room = await interaction.guild.create_voice_channel(
-                name, category=category, reason="Где играем: комната коллера", user_limit=MAX_CALLERS + 5
+                name,
+                category=category,
+                reason="Где играем: комната коллера",
+                user_limit=MAX_CALLERS + 5,
+                overwrites=overwrites,
             )
         except discord.HTTPException as exc:
             await interaction.response.send_message(
