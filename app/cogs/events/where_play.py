@@ -113,7 +113,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
         if row is None:
             await interaction.followup.send(embed=embeds.error("Не настроено", "Сначала выполните /setup_where_play."), ephemeral=True)
             return
-        if not self.where_play.is_manager(row, interaction.user):
+        if not self.where_play.is_manager(row, interaction.user, self.config.where_play_command_role_ids):
             await interaction.followup.send(
                 embed=embeds.error("Недостаточно прав", "Управление доступно администраторам и роли коллеров."),
                 ephemeral=True,
@@ -133,15 +133,19 @@ class WherePlayCog(ClanCog, name="WherePlay"):
 
     @app_commands.command(name="stop_play", description="Завершить общий сбор")
     @app_commands.guild_only()
+    @checks.requires_role("where_play_command_role_ids")
     async def stop_play(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = await self.where_play.row(interaction.guild_id)
         if row is None:
             await interaction.followup.send(embed=embeds.error("Не настроено", "Сначала выполните /setup_where_play."), ephemeral=True)
             return
-        if not self.where_play.is_manager(row, interaction.user):
+        if not self.where_play.is_manager(row, interaction.user, self.config.where_play_command_role_ids):
             await interaction.followup.send(
-                embed=embeds.error("Недостаточно прав", "Нужны права администратора или роль коллера."), ephemeral=True
+                embed=embeds.error(
+                    "Недостаточно прав", "Нужны права администратора или роль, которой открыт раздел «Где играем»."
+                ),
+                ephemeral=True,
             )
             return
         if not row["active"]:
@@ -154,6 +158,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
 
     @app_commands.command(name="where_play_status", description="Состояние карточки «Где играем»")
     @app_commands.guild_only()
+    @checks.requires_role("where_play_command_role_ids")
     async def where_play_status(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = await self._row_or_reply(interaction)
@@ -163,8 +168,8 @@ class WherePlayCog(ClanCog, name="WherePlay"):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="where_play_card", description="Отправить карточку «Где играем» в текущий канал")
-    @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
+    @checks.requires_role("where_play_command_role_ids")
     async def where_play_card(self, interaction: discord.Interaction) -> None:
         if not isinstance(interaction.channel, discord.TextChannel):
             await interaction.response.send_message(

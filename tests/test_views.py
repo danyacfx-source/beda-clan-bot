@@ -242,6 +242,42 @@ async def test_where_play_command_open_when_config_empty() -> None:
     assert await _run_check(member, config) is True
 
 
+async def test_config_role_passes_inner_is_manager_check() -> None:
+    """Роль из конфига обязана проходить и внутреннюю проверку is_manager.
+
+    Иначе участник проходит проверку команды, попадает внутрь и там же
+    получает «Недостаточно прав» — доступ вроде есть, а на деле нет.
+    """
+    from app.services.where_play_service import WherePlayService
+
+    service = WherePlayService.__new__(WherePlayService)
+    member = SimpleNamespace(
+        id=1,
+        guild_permissions=SimpleNamespace(administrator=False),
+        roles=(SimpleNamespace(id=1048020872667091035, name="Squad A"),),
+    )
+
+    # Роль коллера из карточки не совпадает с конфиг-ролью.
+    assert service.is_manager({"role_id": 1545083746988851261}, member) is False
+    assert (
+        service.is_manager({"role_id": 1545083746988851261}, member, (1048020872667091035,)) is True
+    )
+
+
+async def test_where_play_commands_all_carry_role_check() -> None:
+    """Ограничение должно висеть на всех командах раздела, а не на одной."""
+    from app.cogs.events.where_play import WherePlayCog
+
+    for name in ("where_play", "stop_play", "where_play_status", "where_play_card"):
+        command = getattr(WherePlayCog, name)
+        assert getattr(command, "checks", None), f"у команды {name} нет проверок"
+
+    # setup_where_play остаётся только для админа: это первоначальная настройка.
+    setup = getattr(WherePlayCog, "setup_where_play", None)
+    if setup is not None:
+        assert setup.default_permissions.administrator is True
+
+
 async def test_confirm_view_disables_all_controls_without_nonexistent_api() -> None:
     view = ConfirmView()
 

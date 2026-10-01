@@ -288,12 +288,23 @@ class WherePlayService(BaseService["WherePlayRepository"]):
         )
         return await self._repo.get(guild_id)
 
-    def is_manager(self, row: WherePlayRow, user: discord.abc.GuildUser) -> bool:
-        """Администратор или участник роли коллеров управляет карточкой."""
+    def is_manager(
+        self, row: WherePlayRow, user: discord.abc.GuildUser, extra_role_ids: tuple[int, ...] = ()
+    ) -> bool:
+        """Администратор или участник роли коллеров управляет карточкой.
+
+        ``extra_role_ids`` — роли из конфига, которым доступ раздел «Где играем».
+        Их учитываем здесь же, а не только в проверке команды: внутри команд
+        стоит собственная проверка, и без неё роль прошла бы вход и тут же
+        получила бы отказ.
+        """
         if user.guild_permissions.administrator:
             return True
+        owned = {role.id for role in getattr(user, "roles", ())}
         role_id = row.get("role_id")
-        return role_id is not None and any(role.id == role_id for role in user.roles)
+        if role_id is not None and role_id in owned:
+            return True
+        return bool(owned & set(extra_role_ids))
 
     # --- карточка ---
 
