@@ -461,41 +461,69 @@ class _CallerActivityView(discord.ui.View):
 
 def _caller_room_access(
     guild: discord.Guild, config: Any
-) -> tuple[list[discord.Role], list[tuple[Any, discord.PermissionOverwrite]]]:
+) -> tuple[list[discord.Role], dict[Any, discord.PermissionOverwrite] | None]:
     """Роли, которым открыта комната коллера, и права на её создание.
 
     Без явного запрета для @everyone канал наследует права категории, и в
-    комнату попадёт любой, кто её видит. Если роли не заданы или не найдены,
-    overwrites пустые: канал создаётся как раньше, без ограничения.
+    комнату попадёт любой, кто её видит. Права отдаются словарём: Discord
+    ждёт Mapping, и список кортежей отклоняется с TypeError.
+
+    Если роли не заданы или не найдены, возвращается None: тогда параметр не
+    передаётся вовсе и канал наследует категорию, как до этого изменения.
     """
     allowed: list[discord.Role] = []
+    missing: list[int] = []
     for role_id in config.where_play_caller_role_ids:
         role = guild.get_role(role_id)
         if role is None:
-            logger.warning("Роль %s для комнаты коллера не найдена на сервере %s", role_id, guild.id)
+            missing.append(role_id)
             continue
         allowed.append(role)
 
     if not allowed:
-        logger.warning(
-            "Комната коллера на сервере %s создаётся без ограничения доступа: "
-            "ни одна роль из WHERE_PLAY_CALLER_ROLE_IDS не найдена",
-            guild.id,
-        )
-        return [], []
+        _warn_missing_caller_roles(guild, missing, config)
+        return [], None
 
-    overwrites: list[tuple[Any, discord.PermissionOverwrite]] = [
-        (guild.default_role, discord.PermissionOverwrite(view_channel=False, connect=False, speak=False)),
-        (
-            guild.me,
-            discord.PermissionOverwrite(
-                view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True
-            ),
+    overwrites: dict[Any, discord.PermissionOverwrite] = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False, speak=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, connect=True, speak=True, move_members=True, manage_channels=True
         ),
-    ]
+    }
     for role in allowed:
-        overwrites.append((role, discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)))
+        overwrites[role] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
     return allowed, overwrites
+
+
+#: Серверы, для которых уже перечислили роли в лог: иначе каждое нажатие
+#: «Я коллер» засоряло бы лог одним и тем же списком.
+_CALLER_ROLES_REPORTED: set[int] = set()
+
+
+def _warn_missing_caller_roles(guild: discord.Guild, missing: list[int], config: Any) -> None:
+    """Рассказывает, каких ролей не хватает, и один раз показывает доступные.
+
+    Без списка доступных ролей невозможно понять, откуда взялся неверный ID.
+    """
+    if guild.id in _CALLER_ROLES_REPORTED:
+        logger.warning(
+            "Комната коллера на сервере %s без ограничения: роли из %s не найдены",
+            guild.id,
+            config.where_play_caller_role_ids,
+        )
+        return
+    _CALLER_ROLES_REPORTED.add(guild.id)
+    available = ", ".join(
+        f"{role.id}={role.name}" for role in sorted(guild.roles, key=lambda item: item.position)
+    ) or "нет"
+    logger.warning(
+        "Роли для комнаты коллера не найдены на сервере %s: %s (в конфиге: %s). "
+        "Комната создаётся без ограничения доступа. Роли сервера: %s",
+        guild.id,
+        missing,
+        config.where_play_caller_role_ids,
+        available,
+    )
 
 
 async def _join_caller(services: Services, interaction: discord.Interaction, activity: str) -> None:
@@ -549,13 +577,16 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
                     ephemeral=True,
                 )
                 return
+        # Ограничений нет — параметр не передаём вовсе, иначе канал получит
+        # пустой набор прав вместо наследования категории.
+        extra: dict[str, Any] = {"overwrites": overwrites} if overwrites is not None else {}
         try:
             room = await interaction.guild.create_voice_channel(
                 name,
                 category=category,
                 reason="Где играем: комната коллера",
                 user_limit=MAX_CALLERS + 5,
-                overwrites=overwrites,
+                **extra,
             )
         except discord.HTTPException as exc:
             await interaction.response.send_message(

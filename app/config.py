@@ -24,6 +24,13 @@ def _strs(value: str | None) -> tuple[str, ...]:
     return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
+#: Роли раздела «Где играем» на сервере BEDA. Заданы здесь, а не только в полях
+#: Config, потому что Config пересобирается из переменных окружения и пустое
+#: значение в .env обнуляло бы доступ.
+_DEFAULT_CALLER_ROLE_IDS = "1048020872667091035,1545083746988851261"
+_DEFAULT_COMMAND_ROLE_IDS = "1048020872667091035"
+
+
 @dataclass(slots=True, frozen=True)
 class Config:
     token: str
@@ -77,9 +84,9 @@ class Config:
     where_play_api_url: str = "https://api.wardogservers.com/v1/snapshot"
     where_play_poll_seconds: int = 60
     #: Роли, которым открывается доступ в комнату, созданную кнопкой «Я коллер».
-    where_play_caller_role_ids: tuple[int, ...] = (1048020872667091035, 1545083746988851261)
+    where_play_caller_role_ids: tuple[int, ...] = _DEFAULT_CALLER_ROLE_IDS
     #: Роли, которым доступна команда /where_play. Пусто — без ограничений.
-    where_play_command_role_ids: tuple[int, ...] = (1048020872667091035,)
+    where_play_command_role_ids: tuple[int, ...] = _DEFAULT_COMMAND_ROLE_IDS
     join_code_min: int = 4
     join_code_max: int = 128
 
@@ -187,8 +194,15 @@ class Config:
             events_max_active_per_guild=max(1, min(200, int(os.getenv("EVENTS_MAX_ACTIVE_PER_GUILD", "25")))),
             where_play_api_url=os.getenv("WHERE_PLAY_API_URL", "https://api.wardogservers.com/v1/snapshot"),
             where_play_poll_seconds=max(15, int(os.getenv("WHERE_PLAY_POLL_SECONDS", "60"))),
-            where_play_caller_role_ids=_ints(os.getenv("WHERE_PLAY_CALLER_ROLE_IDS")),
-            where_play_command_role_ids=_ints(os.getenv("WHERE_PLAY_COMMAND_ROLE_IDS")),
+            # Список ролей нельзя оставлять пустым «на всякий случай»: без него
+            # ограничение доступа выключается целиком, и комната коллера
+            # создаётся открытой для всех.
+            where_play_caller_role_ids=_ints(
+                os.getenv("WHERE_PLAY_CALLER_ROLE_IDS", _DEFAULT_CALLER_ROLE_IDS)
+            ),
+            where_play_command_role_ids=_ints(
+                os.getenv("WHERE_PLAY_COMMAND_ROLE_IDS", _DEFAULT_COMMAND_ROLE_IDS)
+            ),
             join_code_min=max(4, min(32, int(os.getenv("JOIN_CODE_MIN", "4")))),
             join_code_max=max(4, min(128, int(os.getenv("JOIN_CODE_MAX", "128")))),
             panel_host=os.getenv("PANEL_HOST", "127.0.0.1"),

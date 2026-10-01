@@ -1,5 +1,6 @@
 """Регрессионные тесты интерактивных представлений."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -115,17 +116,42 @@ async def test_caller_room_is_closed_for_everyone_and_open_for_allowed_roles() -
 
     allowed, overwrites = _caller_room_access(guild, config)
 
-    by_target = {target: ow for target, ow in overwrites}
     assert {role.id for role in allowed} == {squad_a.id, squad_b.id}
-    assert by_target[everyone].view_channel is False
-    assert by_target[everyone].connect is False
+    # Discord отклоняет не-Mapping с TypeError: «overwrites parameter expects a dict».
+    assert isinstance(overwrites, Mapping)
+    assert overwrites[everyone].view_channel is False
+    assert overwrites[everyone].connect is False
     for role in (squad_a, squad_b):
-        assert by_target[role].view_channel is True
-        assert by_target[role].connect is True
+        assert overwrites[role].view_channel is True
+        assert overwrites[role].connect is True
     # Боту нужны права, иначе он не сможет перенести участника и убрать комнату.
-    assert by_target[bot_member].connect is True
-    assert by_target[bot_member].move_members is True
-    assert by_target[bot_member].manage_channels is True
+    assert overwrites[bot_member].connect is True
+    assert overwrites[bot_member].move_members is True
+    assert overwrites[bot_member].manage_channels is True
+
+
+async def test_caller_room_overwrites_match_what_discord_accepts() -> None:
+    """Проверяем ровно то требование, из-за которого канал падал.
+
+    Guild._create_channel принимает Mapping и только его: список кортежей
+    вызывал TypeError в проде, а тесты этого не видели.
+    """
+    squad_a = _FakeOverwriteTarget(id=1048020872667091035, name="Squad A")
+    guild = _FakeOverwriteGuild(
+        id=100,
+        default_role=_FakeOverwriteTarget(id=555, name="@everyone"),
+        me=_FakeOverwriteTarget(id=999, name="BEDA"),
+        roles={squad_a.id: squad_a},
+    )
+    config = SimpleNamespace(where_play_caller_role_ids=(1048020872667091035,))
+
+    _, overwrites = _caller_room_access(guild, config)
+
+    # Условие из discord.py: не Mapping -> TypeError.
+    assert not isinstance(overwrites, (list, tuple))
+    assert isinstance(overwrites, Mapping)
+    for target, perm in overwrites.items():
+        assert isinstance(perm, discord.PermissionOverwrite)
 
 
 async def test_caller_room_ignores_roles_missing_on_guild() -> None:
@@ -142,12 +168,17 @@ async def test_caller_room_ignores_roles_missing_on_guild() -> None:
     allowed, overwrites = _caller_room_access(guild, config)
 
     assert [role.id for role in allowed] == [squad_a.id]
+    assert isinstance(overwrites, Mapping)
     # @everyone закрыт, бот разрешён, найденная роль разрешена.
     assert len(overwrites) == 3
 
 
 async def test_caller_room_stays_open_when_no_roles_configured() -> None:
-    """Пустой конфиг не должен ломать кнопку: канал создаётся как раньше."""
+    """Пустой конфиг не должен ломать кнопку: канал создаётся как раньше.
+
+    None, а не пустой словарь: пустой набор прав запретил бы каналу
+    наследовать категорию, и в комнату не попал бы никто.
+    """
     guild = _FakeOverwriteGuild(
         id=100,
         default_role=_FakeOverwriteTarget(id=555, name="@everyone"),
@@ -159,7 +190,7 @@ async def test_caller_room_stays_open_when_no_roles_configured() -> None:
     allowed, overwrites = _caller_room_access(guild, config)
 
     assert allowed == []
-    assert overwrites == []
+    assert overwrites is None
 
 
 @dataclass

@@ -1,4 +1,4 @@
-﻿"""Тесты порта «Где играем»: код подключения, снапшот-API, карточка, репозиторий."""
+"""Тесты порта «Где играем»: код подключения, снапшот-API, карточка, репозиторий."""
 from __future__ import annotations
 
 import json
@@ -359,4 +359,51 @@ async def test_card_survives_broken_payload(service, repo):
     assert row is not None
     fields = {field.name: field.value for field in service.card(row, None, []).fields}
     assert fields["СЕРВЕР"] == "—"
+#: Роли раздела «Где играем» на BEDA. Дублируются здесь намеренно: тест должен
+#: ловить обнуление доступа, даже если дефолты в app.config поменяют.
+CALLER_ROLES = (1048020872667091035, 1545083746988851261)
+COMMAND_ROLES = (1048020872667091035,)
 
+
+def _config_from_env(monkeypatch) -> Config:
+    """Config собирается из переменных окружения, а не из полей с умолчаниями."""
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    for name in ("WHERE_PLAY_CALLER_ROLE_IDS", "WHERE_PLAY_COMMAND_ROLE_IDS"):
+        monkeypatch.delenv(name, raising=False)
+    return Config.from_env()
+
+
+def test_caller_roles_survive_missing_env(monkeypatch) -> None:
+    """Без переменных в .env доступ в комнату коллера обязан остаться включён.
+
+    Пустой список отключал ограничение целиком: комната создавалась открытой,
+    а в лог падало «ни одна роль не найдена» при вполне существующих ролях.
+    """
+    config = _config_from_env(monkeypatch)
+
+    assert config.where_play_caller_role_ids == CALLER_ROLES
+    assert config.where_play_command_role_ids == COMMAND_ROLES
+
+
+def test_role_ids_can_still_be_overridden_by_env(monkeypatch) -> None:
+    """Явный список в .env должен побеждать дефолтный."""
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    monkeypatch.setenv("WHERE_PLAY_CALLER_ROLE_IDS", "111,222")
+    monkeypatch.setenv("WHERE_PLAY_COMMAND_ROLE_IDS", "333")
+
+    config = Config.from_env()
+
+    assert config.where_play_caller_role_ids == (111, 222)
+    assert config.where_play_command_role_ids == (333,)
+
+
+def test_empty_role_ids_env_disables_restriction_on_purpose(monkeypatch) -> None:
+    """Пустое значение в .env — осознанный отказ от ограничения, а не сбой."""
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    monkeypatch.setenv("WHERE_PLAY_CALLER_ROLE_IDS", "")
+    monkeypatch.setenv("WHERE_PLAY_COMMAND_ROLE_IDS", "")
+
+    config = Config.from_env()
+
+    assert config.where_play_caller_role_ids == ()
+    assert config.where_play_command_role_ids == ()
