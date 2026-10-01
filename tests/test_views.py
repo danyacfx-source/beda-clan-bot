@@ -202,35 +202,76 @@ class _FakeCheckMember:
     roles: tuple = ()
 
 
-def _check_interaction(member, config, guild_id: int = 100) -> SimpleNamespace:
+def _check_interaction(member, config, guild_id: int = 100, section_role_id: int | None = None) -> SimpleNamespace:
     squad = _FakeOverwriteTarget(id=1048020872667091035, name="Squad **A**")
+    known = {squad.id: squad}
+    if section_role_id is not None:
+        known[section_role_id] = _FakeOverwriteTarget(id=section_role_id, name="Коллеры")
     guild = SimpleNamespace(
         id=guild_id,
         default_role=_FakeOverwriteTarget(id=555, name="@everyone"),
         me=_FakeOverwriteTarget(id=999, name="BEDA"),
-        get_role=lambda rid: squad if rid == squad.id else None,
+        get_role=lambda rid: known.get(rid),
     )
+    client = SimpleNamespace(config=config)
+    if section_role_id is not None:
+
+        async def _row(_guild_id: int) -> dict:
+            return {"role_id": section_role_id}
+
+        client.services = SimpleNamespace(where_play=SimpleNamespace(row=_row))
     return SimpleNamespace(
-        client=SimpleNamespace(config=config),
+        client=client,
         guild=guild,
         guild_id=guild_id,
         user=member,
     )
 
 
-async def _run_check(member, config) -> bool:
+async def _run_check(member, config, section_role_id: int | None = None) -> bool:
     """Гоняет предикат из checks.requires_role.
 
-    app_commands.check не хранит функцию в себе: он вешает её на
-    декорируемую функцию в __discord_app_commands_checks__.
+    app_commands.check не декоратор в полном смысле: он вешает функцию в
+    атрибут __discord_app_commands_checks__.
     """
+    from app.cogs.events.where_play import _section_role_ids
 
     async def command(interaction) -> None:  # noqa: ARG001
         pass
 
-    checks.requires_role("where_play_command_role_ids")(command)
+    checks.requires_role("where_play_command_role_ids", _section_role_ids)(command)
     (predicate,) = command.__discord_app_commands_checks__
-    return await predicate(_check_interaction(member, config))
+    return await predicate(_check_interaction(member, config, section_role_id=section_role_id))
+
+
+async def test_where_play_command_allowed_for_role_from_setup() -> None:
+    """Роль, выданная через /setup_where_play, обязана пускать и снаружи.
+
+    Внешняя проверка смотрела только на конфиг и резала роль коллеров, хотя
+    внутренняя is_manager её пропускала: человек получал «Недостаточно прав»
+    при положенном доступе.
+    """
+    config = SimpleNamespace(where_play_command_role_ids=(1048020872667091035,))
+    member = _FakeCheckMember(
+        id=7,
+        guild_permissions=SimpleNamespace(administrator=False),
+        roles=(_FakeOverwriteTarget(id=1545083746988851261, name="Коллеры"),),
+    )
+
+    assert await _run_check(member, config, section_role_id=1545083746988851261) is True
+
+
+async def test_where_play_command_denied_without_any_known_role() -> None:
+    """Роль не из конфига и не из /setup_where_play доступа не даёт."""
+    config = SimpleNamespace(where_play_command_role_ids=(1048020872667091035,))
+    member = _FakeCheckMember(
+        id=8,
+        guild_permissions=SimpleNamespace(administrator=False),
+        roles=(_FakeOverwriteTarget(id=1545083746988851261, name="Коллеры"),),
+    )
+
+    with pytest.raises(discord.app_commands.CheckFailure):
+        await _run_check(member, config, section_role_id=None)
 
 
 async def test_where_play_command_allowed_for_configured_role() -> None:

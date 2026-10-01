@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 import discord
 from discord import app_commands
@@ -44,26 +45,39 @@ def is_owner() -> app_commands.check:
     return app_commands.check(predicate)
 
 
-def requires_role(attribute: str) -> app_commands.check:
-    """Пропускает только участников с ролями, перечисленными в конфиге.
+def requires_role(attribute: str, extra_role_ids: Callable[[discord.Interaction], Awaitable[set[int]]] | None = None) -> app_commands.check:
+    """Пропускает участников с ролями из конфига и, опционально, с ролями раздела.
+
+    Проверка аддитивна: достаточно любого одного из источников. Иначе роль,
+    выданная через /setup_where_play, оказывалась отрезана внешней проверкой,
+    хотя внутренняя её допускала, и команда отвечала «Недостаточно прав» тому,
+    кому доступ положен.
 
     Администраторы проходят всегда: иначе ограничение по конкретной роли
     заперло бы снаружи команды того, кто может её настроить. Пустой список
     в конфиге означает «без ограничений», чтобы опечатка в настройке не
     закрыла команду целиком.
     """
+
     async def predicate(interaction: discord.Interaction) -> bool:
         config = getattr(interaction.client, "config", None)
-        role_ids = tuple(getattr(config, attribute, ()) or ()) if config is not None else ()
+        role_ids = set(getattr(config, attribute, ()) or ()) if config is not None else set()
+        if extra_role_ids is not None:
+            # Роль раздела из БД: внешний чек обязан её учитывать, иначе он
+            # ужесточает доступ относительно is_manager внутри команды.
+            try:
+                role_ids |= set(await extra_role_ids(interaction))
+            except Exception:
+                logger.warning("Не удалось прочитать роль раздела «Где играем» для проверки прав", exc_info=True)
         if not role_ids or interaction.guild is None:
             return True
         member = interaction.user
         if member.guild_permissions.administrator:
             return True
-        if {role.id for role in getattr(member, "roles", ())} & set(role_ids):
+        if {role.id for role in getattr(member, "roles", ())} & role_ids:
             return True
         names = []
-        for role_id in role_ids:
+        for role_id in sorted(role_ids):
             role = interaction.guild.get_role(role_id)
             if role is None:
                 logger.warning("Роль %s из %s не найдена на сервере %s", role_id, attribute, interaction.guild_id)

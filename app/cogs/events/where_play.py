@@ -25,6 +25,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger("bot.cogs")
 
 
+async def _section_role_ids(interaction: discord.Interaction) -> set[int]:
+    """Роль коллеров, выданная через /setup_where_play.
+
+    Внешняя проверка прав обязана её учитывать. Раньше она смотрела только
+    на конфиг, и участник с ролью из /setup_where_play получал отказ, хотя
+    внутренняя проверка его пропускала. Сервис берём у клиента: функция
+    передаётся в декоратор, где self ещё не существует.
+    """
+    services = getattr(interaction.client, "services", None)
+    where_play = getattr(services, "where_play", None)
+    if where_play is None or interaction.guild is None:
+        return set()
+    row = await where_play.row(interaction.guild_id)
+    role_id = row.get("role_id") if row is not None else None
+    return {int(role_id)} if role_id is not None else set()
+
+
 class WherePlayCog(ClanCog, name="WherePlay"):
     def __init__(self, bot: ClanBot, where_play: WherePlayService) -> None:
         super().__init__(bot)
@@ -106,7 +123,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
     )
     @app_commands.choices(team=[app_commands.Choice(name=name, value=name) for name in TEAMS])
     @app_commands.guild_only()
-    @checks.requires_role("where_play_command_role_ids")
+    @checks.requires_role("where_play_command_role_ids", _section_role_ids)
     async def where_play(self, interaction: discord.Interaction, server: str, team: str) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = await self.where_play.row(interaction.guild_id)
@@ -133,7 +150,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
 
     @app_commands.command(name="stop_play", description="Завершить общий сбор")
     @app_commands.guild_only()
-    @checks.requires_role("where_play_command_role_ids")
+    @checks.requires_role("where_play_command_role_ids", _section_role_ids)
     async def stop_play(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = await self.where_play.row(interaction.guild_id)
@@ -158,7 +175,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
 
     @app_commands.command(name="where_play_status", description="Состояние карточки «Где играем»")
     @app_commands.guild_only()
-    @checks.requires_role("where_play_command_role_ids")
+    @checks.requires_role("where_play_command_role_ids", _section_role_ids)
     async def where_play_status(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         row = await self._row_or_reply(interaction)
@@ -169,7 +186,7 @@ class WherePlayCog(ClanCog, name="WherePlay"):
 
     @app_commands.command(name="where_play_card", description="Отправить карточку «Где играем» в текущий канал")
     @app_commands.guild_only()
-    @checks.requires_role("where_play_command_role_ids")
+    @checks.requires_role("where_play_command_role_ids", _section_role_ids)
     async def where_play_card(self, interaction: discord.Interaction) -> None:
         if not isinstance(interaction.channel, discord.TextChannel):
             await interaction.response.send_message(
