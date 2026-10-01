@@ -362,48 +362,69 @@ async def test_card_survives_broken_payload(service, repo):
 #: Роли раздела «Где играем» на BEDA. Дублируются здесь намеренно: тест должен
 #: ловить обнуление доступа, даже если дефолты в app.config поменяют.
 CALLER_ROLES = (1048020872667091035, 1545083746988851261)
-COMMAND_ROLES = (1048020872667091035,)
+#: Команды раздела открыты обеим ролям, а не только первой.
+COMMAND_ROLES = CALLER_ROLES
 
 
-def _config_from_env(monkeypatch) -> Config:
-    """Config собирается из переменных окружения, а не из полей с умолчаниями."""
-    monkeypatch.setenv("BOT_TOKEN", "test-token")
+def _config_from_env(monkeypatch, tmp_path, **env: str) -> Config:
+    """Config собирается из переменных окружения, а не из полей с умолчаниями.
+
+    Отдельный пустой файл обязателен: load_dotenv ищет .env сам и подставил бы
+    значения из рабочего каталога, и тест проверял бы чужой файл вместо кода.
+    """
     for name in ("WHERE_PLAY_CALLER_ROLE_IDS", "WHERE_PLAY_COMMAND_ROLE_IDS"):
         monkeypatch.delenv(name, raising=False)
-    return Config.from_env()
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    return Config.from_env(env_file=tmp_path / "нет-такого.env")
 
 
-def test_caller_roles_survive_missing_env(monkeypatch) -> None:
+def test_caller_roles_survive_missing_env(monkeypatch, tmp_path) -> None:
     """Без переменных в .env доступ в комнату коллера обязан остаться включён.
 
     Пустой список отключал ограничение целиком: комната создавалась открытой,
     а в лог падало «ни одна роль не найдена» при вполне существующих ролях.
     """
-    config = _config_from_env(monkeypatch)
+    config = _config_from_env(monkeypatch, tmp_path)
 
     assert config.where_play_caller_role_ids == CALLER_ROLES
     assert config.where_play_command_role_ids == COMMAND_ROLES
 
 
-def test_role_ids_can_still_be_overridden_by_env(monkeypatch) -> None:
-    """Явный список в .env должен побеждать дефолтный."""
-    monkeypatch.setenv("BOT_TOKEN", "test-token")
-    monkeypatch.setenv("WHERE_PLAY_CALLER_ROLE_IDS", "111,222")
-    monkeypatch.setenv("WHERE_PLAY_COMMAND_ROLE_IDS", "333")
+def test_command_roles_match_caller_roles(monkeypatch, tmp_path) -> None:
+    """Обе роли должны работать и в комнате, и в командах раздела.
 
-    config = Config.from_env()
+    Расхождение списков — это молчаливое ограничение доступа: в .env и в коде
+    они задаются отдельно, и легко оставить команду за одной ролью.
+    """
+    config = _config_from_env(monkeypatch, tmp_path)
+
+    assert config.where_play_command_role_ids == config.where_play_caller_role_ids
+    assert set(COMMAND_ROLES) == {1048020872667091035, 1545083746988851261}
+
+
+def test_role_ids_can_still_be_overridden_by_env(monkeypatch, tmp_path) -> None:
+    """Явный список в .env должен побеждать дефолтный."""
+    config = _config_from_env(
+        monkeypatch,
+        tmp_path,
+        WHERE_PLAY_CALLER_ROLE_IDS="111,222",
+        WHERE_PLAY_COMMAND_ROLE_IDS="333",
+    )
 
     assert config.where_play_caller_role_ids == (111, 222)
     assert config.where_play_command_role_ids == (333,)
 
 
-def test_empty_role_ids_env_disables_restriction_on_purpose(monkeypatch) -> None:
+def test_empty_role_ids_env_disables_restriction_on_purpose(monkeypatch, tmp_path) -> None:
     """Пустое значение в .env — осознанный отказ от ограничения, а не сбой."""
-    monkeypatch.setenv("BOT_TOKEN", "test-token")
-    monkeypatch.setenv("WHERE_PLAY_CALLER_ROLE_IDS", "")
-    monkeypatch.setenv("WHERE_PLAY_COMMAND_ROLE_IDS", "")
-
-    config = Config.from_env()
+    config = _config_from_env(
+        monkeypatch,
+        tmp_path,
+        WHERE_PLAY_CALLER_ROLE_IDS="",
+        WHERE_PLAY_COMMAND_ROLE_IDS="",
+    )
 
     assert config.where_play_caller_role_ids == ()
     assert config.where_play_command_role_ids == ()
