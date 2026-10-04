@@ -70,6 +70,9 @@ _SESSION_TTL = 24 * 3600
 _SESSION_MAX = 2000
 _RATE_LIMIT_MAX = 600
 _RATE_LIMIT_WINDOW = 60.0
+# Потолок числа ключей в словарях rate/login. Без него словарь растёт
+# с каждым уникальным IP и никогда не уменьшается.
+_KEY_MAP_MAX = 4096
 _TOKEN_FILE = ".panel-token"
 _UPLOAD_DIRNAME = "uploads"
 _UPLOAD_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -633,9 +636,18 @@ class WebPanel:
             return forwarded.split(",")[0].strip() or (request.remote or "?")
         return request.remote or "?"
 
+    @staticmethod
+    def _prune_key_map(mapping: dict[str, deque[float]], cutoff: float) -> None:
+        """Выбрасывает ключи, у которых нет свежих записей (IP, которых уже нет)."""
+        stale = [key for key, hits in mapping.items() if not hits or hits[-1] < cutoff]
+        for key in stale:
+            mapping.pop(key, None)
+
     def _rate_ok(self, request: web.Request) -> bool:
         key = self._rate_key(request)
         now = time.time()
+        if len(self._rate_hits) > _KEY_MAP_MAX:
+            self._prune_key_map(self._rate_hits, now - _RATE_LIMIT_WINDOW)
         hits = self._rate_hits[key]
         while hits and hits[0] < now - _RATE_LIMIT_WINDOW:
             hits.popleft()
@@ -689,7 +701,7 @@ class WebPanel:
                     role = session["role"]
         self._sessions = active
         if len(self._sessions) > _SESSION_MAX:
-            self._sessions = dict(sorted(self._sessions.items(), key=lambda item: item[1]["expires"])[:_SESSION_MAX])
+            self._sessions = dict(sorted(self._sessions.items(), key=lambda item: item[1]["expires"], reverse=True)[:_SESSION_MAX])
         return role
 
     async def _api_logout(self, request: web.Request) -> web.Response:
@@ -801,7 +813,7 @@ class WebPanel:
         csrf = secrets.token_urlsafe(32)
         self._sessions[session_token] = {"expires": time.time() + _SESSION_TTL, "role": role, "csrf": csrf}
         if len(self._sessions) > _SESSION_MAX:
-            self._sessions = dict(sorted(self._sessions.items(), key=lambda item: item[1]["expires"])[:_SESSION_MAX])
+            self._sessions = dict(sorted(self._sessions.items(), key=lambda item: item[1]["expires"], reverse=True)[:_SESSION_MAX])
         query = urlencode({"oauth_token": session_token, "oauth_csrf": csrf})
         return web.Response(status=302, headers={"Location": f"/admin?{query}"})
 
@@ -857,6 +869,8 @@ class WebPanel:
             return self._json({"ok": False, "error": "Unauthorized"}, status=401)
         ip = request.remote or "?"
         now = time.time()
+        if len(self._login_attempts) > _KEY_MAP_MAX:
+            self._prune_key_map(self._login_attempts, now - _LOGIN_WINDOW)
         attempts = self._login_attempts[ip]
         while attempts and attempts[0] < now - _LOGIN_WINDOW:
             attempts.popleft()
@@ -886,7 +900,7 @@ class WebPanel:
         csrf = secrets.token_urlsafe(32)
         self._sessions[token] = {"expires": now + _SESSION_TTL, "role": role, "csrf": csrf}
         if len(self._sessions) > _SESSION_MAX:
-            self._sessions = dict(sorted(self._sessions.items(), key=lambda item: item[1]["expires"])[:_SESSION_MAX])
+            self._sessions = dict(sorted(self._sessions.items(), key=lambda item: item[1]["expires"], reverse=True)[:_SESSION_MAX])
         return self._json({"ok": True, "token": token, "role": role, "csrf": csrf})
 
     async def _api_status(self, request: web.Request) -> web.Response:
@@ -1342,20 +1356,28 @@ class WebPanel:
             return self._json({"ok": False, "error": "Содержимое не соответствует типу файла"}, status=400)
         if ext == ".webp" and data[8:12] != b"WEBP":
             return self._json({"ok": False, "error": "Содержимое не соответствует типу файла"}, status=400)
-        self._uploads_dir.mkdir(parents=True, exist_ok=True)
+        # Запись файла (до 8 МБ) и обход директории — блокирующие вызовы:
+        # в обработчике aiohttp они останавливают весь event loop.
         name = uuid.uuid4().hex + ext
-        (self._uploads_dir / name).write_bytes(data)
+
+        def _store() -> None:
+            self._uploads_dir.mkdir(parents=True, exist_ok=True)
+            (self._uploads_dir / name).write_bytes(data)
+
+        await asyncio.to_thread(_store)
         base = self._public_base(request)
         return self._json({"ok": True, "name": name, "url": f"/uploads/{name}", "absolute_url": f"{base}/uploads/{name}"})
 
     async def _api_uploads_list(self, request: web.Request) -> web.Response:
-        files: list[dict[str, Any]] = []
-        if self._uploads_dir.is_dir():
+        def _scan() -> list[dict[str, Any]]:
+            found: list[dict[str, Any]] = []
+            if not self._uploads_dir.is_dir():
+                return found
             for path in sorted(self._uploads_dir.iterdir(), key=lambda p: p.stat().st_mtime if p.is_file() else 0, reverse=True):
                 if not path.is_file() or _UPLOAD_NAME_RE.match(path.name) is None:
                     continue
                 size = path.stat().st_size
-                files.append(
+                found.append(
                     {
                         "name": path.name,
                         "url": f"/uploads/{path.name}",
@@ -1363,6 +1385,9 @@ class WebPanel:
                         "bytes": size,
                     }
                 )
+            return found
+
+        files: list[dict[str, Any]] = await asyncio.to_thread(_scan)
         return self._json({"ok": True, "count": len(files), "files": files})
 
     async def _api_uploads_delete(self, request: web.Request) -> web.Response:
@@ -1370,9 +1395,15 @@ class WebPanel:
         if _UPLOAD_NAME_RE.match(name) is None:
             return self._json({"ok": False, "error": "Некорректное имя файла"}, status=400)
         path = self._uploads_dir / name
-        if not path.is_file():
+
+        def _remove() -> bool:
+            if not path.is_file():
+                return False
+            path.unlink(missing_ok=True)
+            return True
+
+        if not await asyncio.to_thread(_remove):
             return self._json({"ok": False, "error": "Файл не найден"}, status=404)
-        path.unlink(missing_ok=True)
         return self._json({"ok": True})
 
     @staticmethod
@@ -2746,15 +2777,19 @@ class WebPanel:
             await self.bot.db.backup(snapshot_path)
             if not snapshot_path.is_file():
                 return self._json({"ok": False, "error": "Не удалось создать снапшот"}, status=500)
-            body = snapshot_path.read_bytes()
-            snapshot_path.unlink(missing_ok=True)
+
+            def _cleanup() -> None:
+                snapshot_path.unlink(missing_ok=True)
+
+            body = await asyncio.to_thread(snapshot_path.read_bytes)
+            await asyncio.to_thread(_cleanup)
             return web.Response(
                 body=body,
                 content_type="application/octet-stream",
                 headers={"Content-Disposition": f'attachment; filename="db-snapshot-{datetime.now(UTC).strftime("%Y%m%d-%H%M%S")}.db"'},
             )
         except Exception as exc:
-            snapshot_path.unlink(missing_ok=True)
+            await asyncio.to_thread(snapshot_path.unlink, missing_ok=True)
             return self._json({"ok": False, "error": f"Ошибка снапшота: {exc}"[:200]}, status=500)
 
     def _attachment(self, *, data: bytes | None = None, json_data: dict[str, Any] | None = None, filename: str) -> web.Response:

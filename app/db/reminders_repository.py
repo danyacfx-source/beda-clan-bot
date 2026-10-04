@@ -69,6 +69,18 @@ class RemindersRepository(BaseRepository):
             (reminder_id,),
         )
 
+    async def defer_claim(self, reminder_id: int, seconds: int) -> None:
+        """Продлевает аренду вместо её сброса: недоставленное напоминание
+        повторится через ``seconds``, а не в следующем же такте (иначе один
+        закрытый канал превращался в плотный ретрай каждые 30 секунд)."""
+        from datetime import UTC, datetime, timedelta
+
+        until = datetime.now(UTC) + timedelta(seconds=max(1, seconds))
+        await self.db.execute(
+            "UPDATE reminders SET processing_until = ? WHERE id = ? AND active = 1",
+            (until.isoformat(), reminder_id),
+        )
+
     async def cancel(self, user_id: int, reminder_id: int) -> bool:
         cursor = await self.db.execute("DELETE FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user_id))
         return cursor.rowcount > 0

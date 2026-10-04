@@ -60,8 +60,17 @@ class ModerationService:
         return parse_duration(value)
 
     @staticmethod
-    def parse_slowmode(value: str) -> int:
+    def parse_slowmode(value: str) -> int | None:
+        """Слоумод в секундах, 0 — выключить, None — вход не распознан.
+
+        Раньше нераспознанный ввод превращался в 0 («отключён»), а отрицательные
+        значения срезались регуляркой и превращались в положительные.
+        """
         if value.strip().lower() in {"off", "0", "0s"}:
             return 0
+        if "-" in value:
+            return None
         seconds = parse_duration(value)
-        return 0 if seconds is None else max(0, min(21600, seconds))
+        if seconds is None or seconds <= 0:
+            return None
+        return min(21600, seconds)

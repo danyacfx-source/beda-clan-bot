@@ -23,8 +23,29 @@ from app.core.views import (
 class _FakeResponse:
     def __init__(self, calls: list[str]) -> None:
         self._calls = calls
+        self._done = False
 
     async def send_message(self, *, embed=None, ephemeral: bool = False) -> None:
+        self._done = True
+        self._calls.append(getattr(embed, "title", "") or "")
+
+    async def defer(self, *, ephemeral: bool = False, thinking: bool = False) -> None:
+        self._done = True
+
+    def is_done(self) -> bool:
+        return self._done
+
+
+class _FakeFollowup:
+    """Followup-ответ: команды сначала делают defer, потом отвечают через него."""
+
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    async def send(self, *, embed=None, ephemeral: bool = False, view=None) -> None:
+        self._calls.append(getattr(embed, "title", "") or "")
+
+    async def edit_message(self, *, embed=None, view=None) -> None:
         self._calls.append(getattr(embed, "title", "") or "")
 
 
@@ -44,6 +65,10 @@ class _FakeInteraction:
         self.client = SimpleNamespace(services=object())
         self.message = None
         self.response = _FakeResponse(calls)
+        self.followup = _FakeFollowup(calls)
+
+    async def edit_original_response(self, *, embed=None, view=None) -> None:
+        self.calls.append(getattr(embed, "title", "") or "")
 
 
 class _FakeEvents:

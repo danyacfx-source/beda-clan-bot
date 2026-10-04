@@ -37,4 +37,8 @@ def restore_backup(source: str | Path, target: str | Path, keep_backup: bool = T
     shutil.copy2(source_path, temporary)
     validate_backup(temporary)
     temporary.replace(target_path)
+    # У старой БД остаются sidecar-файлы журнала: SQLite восстановил бы их
+    # поверх уже подменённого файла и перемешал данные новой и старой БД.
+    for sidecar in (Path(f"{target_path}-wal"), Path(f"{target_path}-shm")):
+        sidecar.unlink(missing_ok=True)
     return old_backup

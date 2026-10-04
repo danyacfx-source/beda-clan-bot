@@ -24,30 +24,44 @@ class RulesGateCog(ClanCog, name="RulesGate"):
 
     async def cog_load(self) -> None:
         conf = await self.module_config(self.bot.config.guild_id, "rules_gate")
-        if conf["message_id"] and conf["role_id"]:
+        if self._as_int(conf["message_id"]) and self._as_int(conf["role_id"]):
             self.bot.loop.create_task(self._prepare_gate())
+
+    @staticmethod
+    def _as_int(value: object) -> int | None:
+        """ID сообщения в настройках хранится как TEXT (kind=TEXT в спеке),
+        а payload даёт int: прямое сравнение всегда давало False."""
+        if isinstance(value, bool):
+            return None
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
 
     async def _prepare_gate(self) -> None:
         await self.bot.wait_until_ready()
         for guild in self.bot.guilds:
             conf = await self.module_config(guild.id, "rules_gate")
-            message_id, role_id = conf["message_id"], conf["role_id"]
-            if not (message_id and role_id):
+            message_id, role_id = self._as_int(conf["message_id"]), self._as_int(conf["role_id"])
+            if message_id is None or role_id is None:
+                continue
+            if guild.get_role(role_id) is None:
+                logger.warning("RulesGate: роль %s в гильдии %s не найдена", role_id, guild.id)
                 continue
             for channel in guild.text_channels:
                 try:
                     message = await channel.fetch_message(message_id)
                 except discord.HTTPException:
                     continue
-                if message is not None:
-                    role = guild.get_role(role_id)
-                    if role is None:
-                        return
-                    reaction = discord.utils.get(message.reactions, emoji=_TICK)
-                    if reaction is None:
+                reaction = discord.utils.get(message.reactions, emoji=_TICK)
+                if reaction is None:
+                    try:
                         await message.add_reaction(_TICK)
-                    logger.info("RulesGate: гейт готов на %s", guild.name)
-                return
+                    except discord.HTTPException:
+                        logger.exception("RulesGate: не удалось поставить реакцию в #%s", channel.name)
+                        continue
+                logger.info("RulesGate: гейт готов на %s (#%s)", guild.name, channel.name)
+                break
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
@@ -81,8 +95,9 @@ class RulesGateCog(ClanCog, name="RulesGate"):
             return None
         conf = await self.module_config(payload.guild_id, "rules_gate")
         emoji_name = getattr(payload.emoji, "name", str(payload.emoji))
-        message_id, role_id = conf["message_id"], conf["role_id"]
-        if emoji_name != _TICK or not message_id or not role_id or payload.message_id != message_id:
+        message_id = self._as_int(conf["message_id"])
+        role_id = self._as_int(conf["role_id"])
+        if emoji_name != _TICK or message_id is None or role_id is None or payload.message_id != message_id:
             return None
         return guild.get_role(role_id)
 

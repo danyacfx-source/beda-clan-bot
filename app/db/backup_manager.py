@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -91,6 +92,14 @@ class DatabaseBackupManager:
             hint = _PG_DUMP_HINT if self.database.is_postgres else f"Файл не найден: {error.filename}"
             self._last_error = hint
             raise RuntimeError(hint) from error
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # Любая другая ошибка тоже должна попадать в health-эндпоинт:
+            # иначе статус оставался last_error=None при падающих бэкапах.
+            self._last_error = (str(error) or error.__class__.__name__)[:300]
+            target.unlink(missing_ok=True)
+            raise
         self._last_backup = result
         self._last_error = None
         self._prune()
@@ -115,19 +124,25 @@ class DatabaseBackupManager:
                 logger.warning("Не удалось создать backup: %s", self._last_error)
 
     def _prune(self) -> None:
-        backups = sorted(
-            (path for path in self.directory.glob("bot-*.dump") if path.is_file()),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        ) + sorted(
-            (path for path in self.directory.glob("bot-*.db") if path.is_file()),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        for old_backup in sorted(backups, key=lambda path: path.stat().st_mtime, reverse=True)[
-            self.retention :
-        ]:
+        # Свежие backup'ы — по mtime, дальше retention. Незавершённые *.tmp
+        # (обрыв записи) и *.bak от restore иначе копятся вечно: их не
+        # покрывает ни один glob.
+        backups = [
+            path
+            for pattern in ("bot-*.dump", "bot-*.db", "*.before-restore-*.bak")
+            for path in self.directory.glob(pattern)
+            if path.is_file()
+        ]
+        backups.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        for old_backup in backups[self.retention :]:
             try:
                 old_backup.unlink()
             except OSError:
                 logger.warning("Не удалось удалить старый backup: %s", old_backup, exc_info=True)
+        now = time.time()
+        for temp in list(self.directory.glob("*.tmp")):
+            try:
+                if temp.is_file() and now - temp.stat().st_mtime > 3600:
+                    temp.unlink()
+            except OSError:
+                logger.warning("Не удалось удалить временный файл: %s", temp, exc_info=True)

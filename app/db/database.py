@@ -607,8 +607,14 @@ class Database:
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> aiosqlite.Cursor:
         if self._postgres is not None:
             return await self._postgres.execute(sql, params)
-        cursor = await self.conn.execute(sql, params)
-        await self.conn.commit()
+        try:
+            cursor = await self.conn.execute(sql, params)
+            await self.conn.commit()
+        except Exception:
+            # Без rollback неудачный INSERT оставлял открытую неявную
+            # транзакцию: следующий commit подтверждал частичную запись.
+            await self.conn.rollback()
+            raise
         return cursor
 
     async def fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> aiosqlite.Row | None:

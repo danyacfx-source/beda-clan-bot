@@ -354,10 +354,13 @@ class EditConfirmView(_FlowView):
 
 
 async def _publish(service: EventService, interaction: discord.Interaction, flow: EventFlow) -> None:
+    # Дефер первым шагом: до ответа идут запись ивента в БД, отправка
+    # карточки в канал и её перерисовка — в 3 секунды это не укладывается.
+    await interaction.response.defer()
     channel = interaction.client.get_channel(flow.channel_id)
     if not isinstance(channel, discord.TextChannel):
         service.flows.discard(flow.user_id)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=embeds.error("Канал недоступен", "Канал, из которого запущен мастер, больше не найден."), view=None
         )
         return
@@ -377,7 +380,7 @@ async def _publish(service: EventService, interaction: discord.Interaction, flow
             )
     except (EventValidationError, KeyError) as exc:
         service.flows.discard(flow.user_id)
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=embeds.error("Не удалось создать", str(exc) or "Мастер заполнен не полностью."), view=None
         )
         return
@@ -385,7 +388,7 @@ async def _publish(service: EventService, interaction: discord.Interaction, flow
 
     event = await service.get(event_id)
     if event is None:
-        await interaction.response.edit_message(embed=embeds.error("Ошибка", "Ивент создан, но не найден."), view=None)
+        await interaction.edit_original_response(embed=embeds.error("Ошибка", "Ивент создан, но не найден."), view=None)
         return
     view = EventSignupView(event_id)
     # Упоминание роли уходит в текст сообщения, а не в embed: так пинг
@@ -400,36 +403,45 @@ async def _publish(service: EventService, interaction: discord.Interaction, flow
     try:
         message = await channel.send(content=mention, embed=await service.embed(event), view=view)
     except discord.HTTPException as exc:
-        await service.cancel(event_id)
-        await interaction.response.edit_message(embed=embeds.error("Не удалось опубликовать", f"Сообщение не отправлено: {exc}"), view=None)
+        # Ивент НЕ удаляем: сбой отправки (429/5xx) — временный, а отмена
+        # теряла созданное событие целиком, без возможности переиздания.
+        logger.exception("Не удалось отправить карточку ивента #%s в канал %s", event_id, flow.channel_id)
+        await interaction.edit_original_response(
+            embed=embeds.error(
+                "Не удалось опубликовать",
+                f"Ивент создан и остаётся активным (см. /event_list), но карточка не отправлена: {exc}\n"
+                "Проверьте права бота на отправку сообщений в канале.",
+            ),
+            view=None,
+        )
         return
     await service.bind_message(event_id, message.id)
     interaction.client.add_view(view, message_id=message.id)
-    await interaction.response.edit_message(embed=embeds.success("Ивент опубликован", f"Сообщение: {message.jump_url}"), view=None)
+    await interaction.edit_original_response(embed=embeds.success("Ивент опубликован", f"Сообщение: {message.jump_url}"), view=None)
 
 
 async def _apply_edit(service: EventService, interaction: discord.Interaction, flow: EventFlow) -> None:
     if flow.event_id is None or flow.edit_field is None:
-        await interaction.response.edit_message(embed=embeds.error("Ошибка", "Нечего сохранять."), view=None)
+        await interaction.edit_original_response(embed=embeds.error("Ошибка", "Нечего сохранять."), view=None)
         return
     event = await service.get(flow.event_id)
     if event is None:
-        await interaction.response.edit_message(embed=embeds.error("Ивент не найден", "Возможно, он удалён."), view=None)
+        await interaction.edit_original_response(embed=embeds.error("Ивент не найден", "Возможно, он удалён."), view=None)
         return
     if not await service.is_creator(event, flow.user_id):
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=embeds.error("Недостаточно прав", "Редактировать может только создатель ивента."), view=None
         )
         return
     try:
         await service.update(event, flow.edit_field, str(flow.data.get("new_value", "")))
     except EventValidationError as exc:
-        await interaction.response.edit_message(embed=embeds.error("Не сохранено", str(exc)), view=None)
+        await interaction.edit_original_response(embed=embeds.error("Не сохранено", str(exc)), view=None)
         return
     updated = await service.get(flow.event_id)
     if updated is not None:
         await _redraw(interaction.client, updated)
-    await interaction.response.edit_message(embed=embeds.success("Ивент обновлён", "Карточка в канале перерисована."), view=None)
+    await interaction.edit_original_response(embed=embeds.success("Ивент обновлён", "Карточка в канале перерисована."), view=None)
 
 
 async def _redraw(client: discord.Client, event: EventRow, *, cancelled: bool = False) -> None:

@@ -29,6 +29,9 @@ class ReminderService(BaseService[RemindersRepository]):
     async def release_claim(self, reminder_id: int) -> None:
         await self._repo.release_claim(reminder_id)
 
+    async def defer_claim(self, reminder_id: int, seconds: int) -> None:
+        await self._repo.defer_claim(reminder_id, seconds)
+
     async def cancel(self, user_id: int, reminder_id: int) -> bool:
         return await self._repo.cancel(user_id, reminder_id)
 

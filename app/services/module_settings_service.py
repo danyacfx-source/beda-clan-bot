@@ -50,14 +50,17 @@ class ModuleSettingsService:
 
     async def _overrides(self, guild_id: int) -> dict[str, dict[str, Any]]:
         cached = self._cache.get(guild_id)
-        if cached is None:
-            try:
-                cached = await self._repo.get_all(guild_id)
-            except Exception:
-                logger.exception("Не удалось прочитать настройки модулей сервера %s", guild_id)
-                cached = {}
-            self._cache[guild_id] = cached
-        return cached
+        if cached is not None:
+            return cached
+        try:
+            loaded = await self._repo.get_all(guild_id)
+        except Exception:
+            # Ошибку не кэшируем: иначе пустой кэш «залипал» до следующего
+            # invalidate(), и все настройки выглядели сброшенными.
+            logger.exception("Не удалось загрузить настройки модулей для гильдии %s", guild_id)
+            return {}
+        self._cache[guild_id] = loaded
+        return loaded
 
     async def get(self, guild_id: int, module: str) -> dict[str, Any]:
         """Эффективные значения модуля: БД поверх ``.env``."""

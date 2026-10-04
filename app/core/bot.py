@@ -49,7 +49,7 @@ class ClanBot(commands.Bot):
         self.root = None
         self.webpanel = None
         self.db_backups = None
-        self._guild_commands_synced = False
+        self._commands_synced = False
         self.start_time = datetime.now(UTC)
         self.tree.on_error = self.on_app_command_error
 
@@ -81,7 +81,7 @@ class ClanBot(commands.Bot):
         loaded = await load_cogs(self)
         await register_persistent_views(self)
         await self._start_webpanel()
-        await self._sync_commands()
+        self._commands_synced = await self._sync_commands()
         # Запускаем первый backup только после bootstrap: SQLite backup API
         # использует очередь того же aiosqlite-соединения и не должен
         # конкурировать с регистрацией persistent views на старте.
@@ -116,10 +116,10 @@ class ClanBot(commands.Bot):
             return
         self.webpanel = panel
 
-    async def _sync_commands(self) -> None:
+    async def _sync_commands(self) -> bool:
         if self.user is None or self.application_id is None:
             logger.debug("Синк команд: application_id ещё не известен — пропуск")
-            return
+            return False
         guild_id = self.config.guild_id
         sync_guild = discord.Object(id=guild_id) if guild_id is not None else None
         try:
@@ -127,15 +127,21 @@ class ClanBot(commands.Bot):
                 self.tree.copy_global_to(guild=sync_guild)
             synced = await self.tree.sync(guild=sync_guild)
         except (discord.HTTPException, discord.MissingApplicationID, discord.ConnectionClosed) as exc:
+            # Флаг успеха не выставляется: on_ready повторит синк на этом же
+            # старте, иначе одна транзиентная ошибка 429/5xx оставляла бы
+            # старые команды вплоть до полного рестарта бота.
             logger.warning("Не удалось синхронизировать команды: %s", exc)
-            return
+            return False
         scope = f"гильдия {guild_id}" if guild_id is not None else "глобально"
         logger.info("Синхронизировано команд (%s): %d", scope, len(synced or []))
+        return True
 
     async def on_ready(self) -> None:
-        if self.config.guild_id is None and not self._guild_commands_synced:
-            await self._sync_commands()
-            self._guild_commands_synced = True
+        # setup_hook уже синхронизирует команды (он вызывается внутри login до
+        # connect), поэтому здесь синк нужен только как повтор при неудаче —
+        # иначе каждый старт делал два bulk-PUT глобальных команд.
+        if self.config.guild_id is None and not self._commands_synced:
+            self._commands_synced = await self._sync_commands()
 
     async def close(self) -> None:
         webpanel = self.webpanel
@@ -184,7 +190,6 @@ class ClanBot(commands.Bot):
             logger.warning("Ошибка команды /%s%s: %s", command, location, original)
         else:
             self._log_error("Ошибка команды /%s%s", error, command, location)
-            await self._notify_error_feed(interaction.guild, f"Команда /{command}: {original}")
 
         if isinstance(original, _BotMissingPermissions):
             embed = embeds.error(
@@ -200,10 +205,13 @@ class ClanBot(commands.Bot):
             embed = embeds.warning("Подождите", f"Команда на перезарядке: {original.retry_after:.1f} сек.")
         elif isinstance(original, discord.Forbidden):
             embed = embeds.error("Боту не хватает прав", "Проверьте права бота и иерархию ролей.")
+        elif isinstance(original, discord.NotFound):
+            # NotFound — подкласс HTTPException, поэтому проверять его нужно
+            # раньше: иначе «объект не существует» показывалось как «Ошибка
+            # Discord API», а ветка была недостижима.
+            embed = embeds.error("Не найдено", "Объект (сообщение/пользователь/канал) больше не существует.")
         elif isinstance(original, discord.HTTPException):
             embed = embeds.error("Ошибка Discord API", str(original))
-        elif isinstance(original, discord.NotFound):
-            embed = embeds.error("Не найдено", "Объект (сообщение/пользователь/канал) больше не существует.")
         elif isinstance(original, app_commands.TransformerError):
             embed = embeds.error("Неверный аргумент", "Некоторые параметры не распознаны. Проверьте ввод.")
         elif isinstance(original, app_commands.CommandInvokeError):
@@ -213,7 +221,11 @@ class ClanBot(commands.Bot):
         else:
             embed = embeds.error("Ошибка команды", _SUPPORT_HINT)
 
+        # Сначала отвечаем пользователю: запись в ленту (БД) может занять
+        # больше 3 секунд, и ответ по уже истёкшему токену никому не нужен.
         await self._reply_error(interaction, embed)
+        if not isinstance(original, known):
+            await self._notify_error_feed(interaction.guild, f"Команда /{command}: {original}")
 
     @staticmethod
     async def _reply_error(interaction: discord.Interaction, embed: discord.Embed) -> None:
@@ -298,6 +310,12 @@ class ClanBot(commands.Bot):
                 pass
             return
         self._log_error("Ошибка префикс-команды %s", error, command)
+        # Раньше здесь был только лог: любая ошибка в теле префикс-команды
+        # (CommandInvokeError) оставляла пользователя без ответа.
+        try:
+            await ctx.reply(embed=embeds.error("Ошибка выполнения", _SUPPORT_HINT), mention_author=False)
+        except (discord.HTTPException, discord.Forbidden):
+            logger.debug("Не удалось ответить на ошибку префикс-команды", exc_info=True)
         await self._notify_error_feed(ctx.guild, f"Префикс-команда {command}: {error}")
 
     async def on_error(self, event_method: str, *args: Any, **kwargs: Any) -> None:

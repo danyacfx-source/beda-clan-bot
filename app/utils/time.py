@@ -18,6 +18,10 @@ def parse_duration(text: str) -> int | None:
     """Разбирает строку вида '2m30s' в секунды. Возвращает None, если распарсить нельзя."""
     if not text:
         return None
+    if "-" in text:
+        # Знак минус регуляркой не видит: «-5m» превращалось в тайм-аут на
+        # 5 минут вместо ошибки формата.
+        return None
     total = 0
     matched = False
     for number, unit in _TIME_TOKEN.findall(text):

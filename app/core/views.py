@@ -92,7 +92,13 @@ class ConfirmView(discord.ui.View):
                 item.disabled = True
 
     async def _default_cancel(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(embed=embeds.info("Действие отменено"), view=None)
+        # Кнопки уже ответили через response.edit_message, поэтому второй ответ
+        # обязан идти через original response — иначе InteractionResponded.
+        info = embeds.info("Действие отменено")
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=info, view=None)
+        else:
+            await interaction.response.edit_message(embed=info, view=None)
 
     @discord.ui.button(label="Подтвердить", style=discord.ButtonStyle.success)
     async def yes_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -148,20 +154,18 @@ class TicketOpenView(_TicketBaseView):
                 ephemeral=True,
             )
             return
+        # create() делает два HTTP-раунда к Discord (создание канала + первый
+        # пост) — без defer ответ не укладывался в 3 секунды.
+        await interaction.response.defer(ephemeral=True)
         result = await self.ticket_service.create(interaction.guild, interaction.user)
         if result.error:
             embed = embeds.error("Не удалось открыть тикет", result.error)
+        elif result.channel is None:
+            embed = embeds.error("Не удалось открыть тикет", "Канал тикета не был создан.")
         else:
-            channel = result.channel
-            if channel is None:
-                await interaction.response.send_message(
-                    embed=embeds.error("Не удалось открыть тикет", "Канал тикета не был создан."),
-                    ephemeral=True,
-                )
-                return
-            embed = embeds.success("Тикет открыт", f"Перейдите в {channel.mention} и опишите вопрос одним сообщением.")
-            embed.add_field(name="КАНАЛ ПОДДЕРЖКИ", value=channel.mention, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = embeds.success("Тикет открыт", f"Перейдите в {result.channel.mention} и опишите вопрос одним сообщением.")
+            embed.add_field(name="КАНАЛ ПОДДЕРЖКИ", value=result.channel.mention, inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 class GiveawayView(discord.ui.View):
@@ -187,6 +191,8 @@ class GiveawayView(discord.ui.View):
             await interaction.response.send_message(embed=embeds.warning("Розыгрыш завершён"), ephemeral=True)
             return
 
+        # Дальше — fetch_member и запись в БД, отвечаем первым шагом.
+        await interaction.response.defer(ephemeral=True)
         min_days = giveaway.get("min_days", 0)
         if min_days > 0 and interaction.guild is not None:
             member = interaction.guild.get_member(interaction.user.id)
@@ -196,7 +202,7 @@ class GiveawayView(discord.ui.View):
                 except discord.HTTPException:
                     member = None
             if member is None or member.joined_at is None:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     embed=embeds.error("Ошибка", "Не удалось определить дату вашего вступления на сервер."), ephemeral=True
                 )
                 return
@@ -205,7 +211,7 @@ class GiveawayView(discord.ui.View):
                 joined = joined.replace(tzinfo=UTC)
             delta = datetime.now(UTC) - joined
             if delta.days < min_days:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     embed=embeds.error(
                         "Не выполнено условие",
                         f"Для участия нужно находиться на сервере минимум {min_days} дн. (вы на сервере {delta.days} дн.).",
@@ -220,7 +226,7 @@ class GiveawayView(discord.ui.View):
             if added
             else embeds.info("Вы уже участвуете", "Повторно нажимать кнопку не нужно.")
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         try:
             embed = await services.giveaways.embed(giveaway)
             await interaction.message.edit(embed=embed)
@@ -244,24 +250,28 @@ class _PollOptionButton(discord.ui.Button):
         self.index = index
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        # Ответ первым шагом: до него — чтение опроса и голос в БД.
+        # defer без ephemeral, чтобы сохранить возможность редактировать
+        # исходное сообщение опроса.
+        await interaction.response.defer()
         services: Services | None = getattr(interaction.client, "services", None)
         if services is None:
-            await interaction.response.send_message(embed=embeds.error("Ошибка", "Сервисы недоступны."), ephemeral=True)
+            await interaction.followup.send(embed=embeds.error("Ошибка", "Сервисы недоступны."), ephemeral=True)
             return
         poll = await services.polls.get(self.poll_id)
         if poll is None or not poll["active"]:
-            await interaction.response.send_message(embed=embeds.warning("Опрос завершён"), ephemeral=True)
+            await interaction.followup.send(embed=embeds.warning("Опрос завершён"), ephemeral=True)
             return
         if interaction.guild_id is not None and poll["guild_id"] != interaction.guild_id:
-            await interaction.response.send_message(embed=embeds.error("Не на этом сервере"), ephemeral=True)
+            await interaction.followup.send(embed=embeds.error("Не на этом сервере"), ephemeral=True)
             return
         option_count = len(json.loads(poll["options"]))
         if self.index >= option_count:
-            await interaction.response.send_message(embed=embeds.error("Вариант недоступен"), ephemeral=True)
+            await interaction.followup.send(embed=embeds.error("Вариант недоступен"), ephemeral=True)
             return
         status = await services.polls.vote(self.poll_id, interaction.user.id, self.index, option_count)
         embed = await services.polls.embed(self.poll_id)
-        await interaction.response.edit_message(embed=embed)
+        await interaction.edit_original_response(embed=embed)
         if status == 2:
             notice = embeds.success("Голос учтён")
         elif status == 1:
@@ -296,10 +306,11 @@ async def _handle_event_signup(interaction: discord.Interaction, role: str) -> N
     if not event["active"]:
         await interaction.response.send_message(embed=embeds.warning("Ивент отменён"), ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     try:
         added = await services.events.set_signup(event, interaction.user.id, role)
     except ValueError as exc:
-        await interaction.response.send_message(embed=embeds.error("Не удалось", str(exc)), ephemeral=True)
+        await interaction.followup.send(embed=embeds.error("Не удалось", str(exc)), ephemeral=True)
         return
     label = EVENT_SIGNUP_OPTIONS[role][0]
     notice = (
@@ -307,7 +318,7 @@ async def _handle_event_signup(interaction: discord.Interaction, role: str) -> N
         if added
         else embeds.info("Отметка снята", f"Статус **{label}** снят.")
     )
-    await interaction.response.send_message(embed=notice, ephemeral=True)
+    await interaction.followup.send(embed=notice, ephemeral=True)
     # Счётчики в карточке должны отражать только что записанную отметку,
     # поэтому перечитываем ивент, а не переиспользуем прочитанный ранее.
     fresh = await services.events.get(int(event["id"]))
@@ -455,6 +466,11 @@ class _CallerActivityView(discord.ui.View):
     async def _on_select(self, interaction: discord.Interaction) -> None:
         select = self.children[0]
         if not isinstance(select, discord.ui.Select) or not select.values:
+            # Молчаливый return оставлял interaction без ответа — пользователь
+            # видел «приложение не ответило вовремя».
+            await interaction.response.send_message(
+                embed=embeds.error("Пустой выбор", "Выберите значение из списка."), ephemeral=True
+            )
             return
         await _join_caller(self.services, interaction, select.values[0])
 
@@ -531,18 +547,24 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
         await interaction.response.send_message(embed=embeds.error("Неверный выбор", "Выберите деятельность из списка."), ephemeral=True)
         return
     if not isinstance(interaction.user, discord.Member) or interaction.user.voice is None:
+        await interaction.response.send_message(
+            embed=embeds.error("Вы не в голосовом канале", "Сначала зайдите в голосовой канал и повторите."), ephemeral=True
+        )
         return
     category = interaction.guild.get_channel(interaction.client.config.temp_voice_category_id or 0)
     if not isinstance(category, discord.CategoryChannel):
         await interaction.response.send_message(embed=embeds.error("Не настроено", "Категория голосовых комнат не задана."), ephemeral=True)
         return
 
+    # Дальше идут запросы к БД и создание канала: отвечаем первым шагом.
+    await interaction.response.defer(ephemeral=True)
+
     # temp_voices ключуется по owner_id глобально, поэтому чужая комната на
     # другом сервере помешала бы создать новую (конфликт первичного ключа).
     room_id = await services.tempvoice.channel_of_owner(interaction.user.id)
     room = interaction.guild.get_channel(room_id) if room_id else None
     if room_id is not None and not isinstance(room, discord.VoiceChannel):
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=embeds.error(
                 "Комната на другом сервере",
                 "У вас уже есть временная комната на другом сервере. Освободите её — "
@@ -569,7 +591,7 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
             member_role_ids = {role.id for role in interaction.user.roles}
             if not any(role.id in member_role_ids for role in allowed_roles):
                 names = ", ".join(discord.utils.escape_markdown(role.name) for role in allowed_roles)
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     embed=embeds.error(
                         "Нет доступа к комнате",
                         f"Комната коллера доступна только участникам с ролями: {names}.",
@@ -589,7 +611,7 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
                 **extra,
             )
         except discord.HTTPException as exc:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=embeds.error("Не удалось создать комнату", f"Discord отклонил запрос: {exc}"), ephemeral=True
             )
             return
@@ -599,7 +621,7 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
         except Exception:
             logger.exception("Где играем: не удалось сохранить комнату #%s", room.id)
             await room.delete(reason="Где играем: не удалось сохранить комнату")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=embeds.error("Не удалось сохранить комнату", "Попробуйте ещё раз чуть позже."), ephemeral=True
             )
             return
@@ -611,7 +633,7 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
             with contextlib.suppress(discord.HTTPException):
                 await room.delete(reason="Не удалось перенести коллера")
             await services.tempvoice.delete(room.id)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=embeds.error("Не удалось перенести", f"Бот не смог переместить вас: {exc}"), ephemeral=True
         )
         return
@@ -621,7 +643,7 @@ async def _join_caller(services: Services, interaction: discord.Interaction, act
     if row is not None:
         with contextlib.suppress(discord.HTTPException):
             await services.where_play.publish(row)
-    await interaction.response.send_message(
+    await interaction.followup.send(
         embed=embeds.success("Комната готова", f"Вы в {room.mention}. Список коллеров обновится в карточке."),
         ephemeral=True,
     )
@@ -650,9 +672,12 @@ class TicketCloseView(_TicketBaseView):
             )
             return
         channel = interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
+        # close() строит транскрипт, шлёт файл и планирует удаление канала —
+        # до ответа проходит несколько HTTP-запросов.
+        await interaction.response.defer(ephemeral=True)
         result = await self.ticket_service.close(interaction.guild, channel, interaction.user)
         if result.error:
             embed = embeds.error("Не удалось закрыть тикет", result.error)
         else:
             embed = embeds.success("Тикет закрыт", result.transcript_channel_mention)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)

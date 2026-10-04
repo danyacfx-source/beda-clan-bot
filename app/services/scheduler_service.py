@@ -58,6 +58,9 @@ class ScheduledMessagesService(BaseService[ScheduledRepository]):
     async def release_claim(self, scheduled_id: int) -> None:
         await self._repo.release_claim(scheduled_id)
 
+    async def defer_claim(self, scheduled_id: int, seconds: int) -> None:
+        await self._repo.defer_claim(scheduled_id, seconds)
+
     async def mark_done(self, scheduled_id: int) -> None:
         await self._repo.mark_done(scheduled_id)
 

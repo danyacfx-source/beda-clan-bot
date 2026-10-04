@@ -80,12 +80,14 @@ class SetupCog(ClanCog, name="Setup"):
 
     @setup.command(name="log-channel", description="Канал для логов событий и модерации")
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     async def log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         await self.settings.update(interaction.guild.id, log_channel_id=channel.id)
         await interaction.response.send_message(embed=embeds.success("Настройка", f"Логи → {channel.mention}"))
 
     @setup.command(name="log-type", description="Отдельный канал для конкретного типа логов")
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.choices(
         kind=[
             app_commands.Choice(name="Бот (запуск)", value="bot"),
@@ -107,6 +109,7 @@ class SetupCog(ClanCog, name="Setup"):
 
     @setup.command(name="ticket-category", description="Категория для создания тикетов")
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     async def ticket_category(self, interaction: discord.Interaction, category: discord.CategoryChannel) -> None:
         await self.settings.update(interaction.guild.id, ticket_category_id=category.id)
         await interaction.response.send_message(embed=embeds.success("Настройка", f"Тикеты → {category.mention}"))
@@ -114,6 +117,7 @@ class SetupCog(ClanCog, name="Setup"):
     @setup.command(name="unset", description="Сбросить настройку канала")
     @app_commands.describe(option="Какую настройку сбросить")
     @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
     async def unset(self, interaction: discord.Interaction, option: str) -> None:
         mapping = {
             "log": "log_channel_id",

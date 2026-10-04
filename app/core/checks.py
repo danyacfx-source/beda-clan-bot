@@ -23,7 +23,11 @@ def bot_has_permissions(**perms: bool):
         if interaction.guild is None:
             return True
         required = [name for name, needed in perms.items() if needed]
-        missing = [name for name in required if not getattr(interaction.guild.me.guild_permissions, name, False)]
+        # guild.me может быть None, пока кэш участников не прогрет: тогда
+        # AttributeError вылетал как неизвестная ошибка команды вместо внятного
+        # «не хватает прав».
+        me = interaction.guild.me
+        missing = sorted(required) if me is None else [name for name in required if not getattr(me.guild_permissions, name, False)]
         if missing:
             from app.core.bot import _BotMissingPermissions
 

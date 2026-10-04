@@ -26,6 +26,9 @@ _HOST_RE = re.compile(r"//(?:www\.)?([^/]+)", re.IGNORECASE)
 _STRETCH_RE = re.compile(r"(.)\1{5,}", re.IGNORECASE)
 
 _SPAM_WINDOW = 5.0
+# Потолок числа отслеживаемых пользователей: словари счётчиков иначе растут
+# вечно (ключи не удаляются).
+_TRACKED_USERS_MAX = 2000
 
 
 def _normalized_allowed_links(raw: str) -> list[str]:
@@ -211,7 +214,7 @@ class AutoModCog(ClanCog, name="AutoMod"):
         if message.channel.id in set(conf["ignored_channels"]):
             return
 
-        self._track_spam(member.id)
+        self._track_spam(member.id, int(conf["max_messages_in_window"]))
         blocked_words = await self.settings.blocked_words(message.guild.id)
         reason = self._analyze(member.id, message.content or "", blocked_words, conf)
         if not reason:
@@ -226,8 +229,11 @@ class AutoModCog(ClanCog, name="AutoMod"):
         logger.warning("Automod: %s в #%s: %s", message.author, channel_name, reason)
 
     def _has_ignored_role(self, member: discord.Member, conf: dict[str, Any]) -> bool:
-        ignored = set(conf["ignore_roles"])
-        return bool(ignored and any(role.name in ignored for role in member.roles))
+        # ignore_roles — это IDS: список числовых ID (см. module_settings._to_ids).
+        # Сравнение с role.name никогда не совпадало, поэтому список
+        # игнорируемых ролей не работал.
+        ignored = {int(role_id) for role_id in conf["ignore_roles"]}
+        return bool(ignored and any(role.id in ignored for role in member.roles))
 
     def _analyze(
         self,
@@ -270,14 +276,20 @@ class AutoModCog(ClanCog, name="AutoMod"):
             return "растянутый спам"
         return None
 
-    def _track_spam(self, user_id: int) -> None:
+    def _track_spam(self, user_id: int, limit: int) -> None:
         now = time.monotonic()
         stamps = self._messages.setdefault(user_id, [])
         while stamps and now - stamps[0] > _SPAM_WINDOW:
             stamps.pop(0)
         stamps.append(now)
-        while len(stamps) > 20:
+        # Жёсткий потолок должен учитывать настройку max_messages_in_window
+        # (до 100): старый лимит в 20 сообщений обнулял счётчик раньше, чем
+        # лимит успевал сработать, и спам-фильтр не срабатывал.
+        while len(stamps) > max(limit, 20):
             stamps.pop(0)
+        if len(self._messages) > _TRACKED_USERS_MAX:
+            for stale in [uid for uid, seen in self._messages.items() if not seen or now - seen[-1] > _SPAM_WINDOW]:
+                self._messages.pop(stale, None)
 
     def _is_spam(self, user_id: int, conf: dict[str, Any]) -> bool:
         max_in_window = conf["max_messages_in_window"]
@@ -304,6 +316,9 @@ class AutoModCog(ClanCog, name="AutoMod"):
             while stamps and now - stamps[0] > window:
                 stamps.pop(0)
             stamps.append(now)
+            if len(self._timeout_counts) > _TRACKED_USERS_MAX:
+                for stale in [uid for uid, seen in self._timeout_counts.items() if not seen or now - seen[-1] > window]:
+                    self._timeout_counts.pop(stale, None)
             if len(stamps) >= ban_after:
                 try:
                     await member.ban(reason=f"Automod: {ban_after} нарушений за {window}с")

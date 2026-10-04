@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -25,11 +26,16 @@ logger = logging.getLogger("bot.cogs")
 _MAX_SECONDS = 30 * 24 * 3600
 _MAX_REMINDERS = 20
 
+# Пауза перед повторной попыткой доставки (аренда строки продлевается, а не
+# сбрасывается — иначе release_claim возвращал ту же строку в этом же такте).
+_RETRY_BACKOFF: tuple[int, ...] = (60, 300, 900, 3600)
+
 
 class RemindersCog(ClanCog, name="Reminders"):
     def __init__(self, bot: ClanBot, reminders: ReminderService) -> None:
         super().__init__(bot)
         self.reminders = reminders
+        self._attempts: dict[int, int] = {}
 
     async def cog_load(self) -> None:
         self.check_loop.start()
@@ -43,30 +49,78 @@ class RemindersCog(ClanCog, name="Reminders"):
             try:
                 item = await self.reminders.claim_due(datetime.now(UTC))
             except Exception:
-                logger.exception("Ошибка при claim напоминания")
+                logger.exception("Не удалось получить claim напоминания")
                 return
             if item is None:
                 return
             try:
                 await self._deliver(item)
             except Exception:
-                logger.exception("Не удалось доставить напоминание #%s", item["id"])
-                await self.reminders.release_claim(item["id"])
+                attempts = self._attempts.get(item["id"], 0) + 1
+                self._attempts[item["id"]] = attempts
+                delay = _RETRY_BACKOFF[min(attempts - 1, len(_RETRY_BACKOFF) - 1)]
+                logger.exception(
+                    "Не удалось доставить напоминание #%s (попытка %s, повтор через %s сек)",
+                    item["id"],
+                    attempts,
+                    delay,
+                )
+                await self.reminders.defer_claim(item["id"], delay)
             else:
-                await self.reminders.mark_done(item["id"])
+                self._attempts.pop(item["id"], None)
+                await self._mark_done_with_retry(item["id"])
+
+    @check_loop.before_loop
+    async def before_check_loop(self) -> None:
+        # Первый прогон tasks.loop случается в setup_hook, до READY: кэш пуст,
+        # get_user/get_channel давали None, и просроченное напоминание молча
+        # деактивировалось.
+        await self.bot.wait_until_ready()
+
+    async def _mark_done_with_retry(self, reminder_id: int) -> None:
+        """Доставка прошла: mark_done выполняется отдельно и с ретраем.
+
+        Сбой mark_done не должен откатывать аренду (release_claim) — иначе
+        напоминание ушло бы повторно.
+        """
+        for attempt in range(3):
+            try:
+                await self.reminders.mark_done(reminder_id)
+                return
+            except Exception:
+                if attempt == 2:
+                    logger.exception("Напоминание #%s доставлено, но не помечено выполненным", reminder_id)
+                else:
+                    await asyncio.sleep(1)
 
     async def _deliver(self, item: ReminderRow) -> None:
-        user = self.bot.get_user(item["user_id"])
         embed = embeds.info("⏰ Напоминание", item["message"])
         embed.set_footer(text=f"ID напоминания: {item['id']}")
         channel = self.bot.get_channel(item["channel_id"]) if item["channel_id"] else None
-        if isinstance(channel, discord.TextChannel):
+        if isinstance(channel, (discord.TextChannel, discord.Thread)):
             await channel.send(embed=embed)
-        elif user is not None:
+            return
+
+        user = self.bot.get_user(item["user_id"])
+        if user is None:
             try:
-                await user.send(embed=embed)
+                user = await self.bot.fetch_user(item["user_id"])
             except discord.HTTPException:
-                logger.warning("Не удалось отправить ЛС пользователю %s", user.id)
+                user = None
+        if user is None:
+            logger.warning("Напоминание #%s: пользователь %s не найден — доставка пропущена", item["id"], item["user_id"])
+            return
+        try:
+            await user.send(embed=embed)
+        except discord.Forbidden:
+            # У участника закрыты ЛС или он заблокировал бота: повторять
+            # бессмысленно, но и помечать «выполнено» молча нельзя — пишем.
+            logger.warning("Напоминание #%s: %s закрыл(а) ЛС — доставка пропущена", item["id"], user.id)
+        except discord.HTTPException:
+            # Временный сбой (429/5xx): пробрасываем, чтобы сработал ретрай
+            # с откладыванием, а не потеря напоминания.
+            logger.warning("Напоминание #%s: не удалось отправить ЛС пользователю %s", item["id"], user.id)
+            raise
 
     @app_commands.command(name="remindme", description="Напомнить вам о чём-либо через некоторое время")
     @app_commands.describe(duration="Срок, например: 30s, 5m, 2h, 1d", text="Текст напоминания")

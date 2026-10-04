@@ -33,8 +33,10 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
         self._task: asyncio.Task[None] | None = None
 
     async def cog_load(self) -> None:
-        conf = await self.module_config(self.bot.config.guild_id, "birthdays")
-        if conf["channel_id"] is not None and self._task is None:
+        # Цикл запускаем всегда: настройку канала можно задать из панели уже
+        # после старта, а условие «канал задан» на момент загрузки кога
+        # оставляло анонс выключенным до рестарта.
+        if self._task is None:
             self._task = self.bot.loop.create_task(self._loop())
 
     async def cog_unload(self) -> None:
@@ -45,19 +47,23 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
     async def _loop(self) -> None:
         await self.bot.wait_until_ready()
         while True:
-            # Час читаем каждый круг: смена настройки в панели подхватывается без рестарта.
-            hour = (await self.module_config(self.bot.config.guild_id, "birthdays"))["announce_hour"]
-            now = datetime.now()
-            target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target += timedelta(days=1)
             try:
+                # Час читаем каждый круг: смена настройки в панели подхватывается без рестарта.
+                conf = await self.module_config(self.bot.config.guild_id, "birthdays")
+                # Значение из БД не валидируется на запись: некорректный час
+                # убивал бы весь цикл на datetime.replace(hour=...).
+                hour = max(0, min(23, int(conf["announce_hour"] or 0)))
+                now = datetime.now()
+                target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+                if now >= target:
+                    target += timedelta(days=1)
                 await asyncio.sleep((target - now).total_seconds())
                 await self._announce()
             except asyncio.CancelledError:
                 break
             except Exception:
-                logger.exception("Birthdays: ошибка анонса")
+                logger.exception("Birthdays: ошибка цикла анонса")
+                await asyncio.sleep(60)
 
     async def _announce(self) -> None:
         conf = await self.module_config(self.bot.config.guild_id, "birthdays")
@@ -65,7 +71,9 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
         if channel_id is None:
             return
         channel = self.bot.get_channel(channel_id)
-        if channel is None:
+        # В настройку может попасть голосовой канал или тред: у них нет send().
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            logger.warning("Birthdays: канал %s недоступен или не текстовый — анонс пропущен", channel_id)
             return
         now = datetime.now()
         rows = await self.birthdays.with_date(now.month, now.day)
@@ -97,6 +105,7 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
 
     @birthday.command(name="set", description="Указать свою дату рождения (дд.мм)")
     @app_commands.describe(date="Дата в формате дд.мм")
+    @app_commands.guild_only()
     async def set_birthday(self, interaction: discord.Interaction, date: str) -> None:
         match = DATE_RE.match(date)
         if match is None:
@@ -119,6 +128,7 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
         )
 
     @birthday.command(name="remove", description="Удалить свою дату рождения")
+    @app_commands.guild_only()
     async def remove_birthday(self, interaction: discord.Interaction) -> None:
         if await self.birthdays.get(interaction.user.id) is None:
             await interaction.response.send_message(embed=embeds.info("Дата не установлена"), ephemeral=True)
@@ -127,6 +137,7 @@ class BirthdaysCog(ClanCog, name="Birthdays"):
         await interaction.response.send_message(embed=embeds.success("Дата удалена"), ephemeral=True)
 
     @birthday.command(name="list", description="Ближайшие дни рождения")
+    @app_commands.guild_only()
     async def list_birthdays(self, interaction: discord.Interaction) -> None:
         rows = await self.birthdays.all()
         if not rows:

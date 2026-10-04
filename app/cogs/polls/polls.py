@@ -47,11 +47,14 @@ class PollsCog(ClanCog, name="Polls"):
         options: list[str] = []
         seen: set[str] = set()
         for raw in (option1, option2, option3, option4, option5):
-            if not raw or raw.strip().lower() == "нет":
+            # Отфильтровывалось ещё и слово «нет» — из-за этого опрос
+            # «Да/Нет» падал с «Минимум 2 варианта», а вариант в пятом поле
+            # молча исчезал из списка.
+            if not raw or not raw.strip():
                 continue
             option = raw.strip()[:100]
             key = option.casefold()
-            if option and key not in seen:
+            if key not in seen:
                 options.append(option)
                 seen.add(key)
         if not question:
@@ -67,11 +70,13 @@ class PollsCog(ClanCog, name="Polls"):
             options = options[:_MAX_OPTIONS]
         question = question[:256]
 
+        # Отвечаем первым шагом: дальше запись опроса и отправка карточки.
+        await interaction.response.defer()
         poll_id = await self.polls.create(interaction.guild.id, interaction.channel.id, interaction.user.id, question, options)
         embed = await self.polls.embed(poll_id)
         view = PollView(poll_id, len(options))
         try:
-            await interaction.response.send_message(embed=embed, view=view)
+            await interaction.edit_original_response(embed=embed, view=view)
             message = await interaction.original_response()
             await self.polls.bind_message(poll_id, message.id)
             self.bot.add_view(view, message_id=message.id)
@@ -84,18 +89,20 @@ class PollsCog(ClanCog, name="Polls"):
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.guild_only()
     async def poll_end(self, interaction: discord.Interaction, poll_id: int) -> None:
+        # Отвечаем первым шагом: ниже — завершение опроса в БД и правка карточки.
+        await interaction.response.defer(ephemeral=True)
         poll = await self.polls.get(poll_id)
         if poll is None:
-            await interaction.response.send_message(embed=embeds.error("Не найдено", "Опроса с таким ID нет."), ephemeral=True)
+            await interaction.followup.send(embed=embeds.error("Не найдено", "Опроса с таким ID нет."), ephemeral=True)
             return
         if poll["guild_id"] != interaction.guild.id:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=embeds.error("Недоступно", "Этот опрос принадлежит другому серверу."),
                 ephemeral=True,
             )
             return
         if not poll["active"]:
-            await interaction.response.send_message(embed=embeds.warning("Уже завершён", "Этот опрос уже закрыт."), ephemeral=True)
+            await interaction.followup.send(embed=embeds.warning("Уже завершён", "Этот опрос уже закрыт."), ephemeral=True)
             return
 
         question, options, counts = await self.polls.end(poll_id)
@@ -116,4 +123,4 @@ class PollsCog(ClanCog, name="Polls"):
                     await message.edit(embed=result, view=None)
                 except discord.HTTPException:
                     pass
-        await interaction.response.send_message(embed=embeds.success("Опрос завершён", "Итоги выведены в канал."), ephemeral=True)
+        await interaction.followup.send(embed=embeds.success("Опрос завершён", "Итоги выведены в канал."), ephemeral=True)

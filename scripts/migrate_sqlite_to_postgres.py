@@ -33,6 +33,7 @@ _TABLES = (
     "giveaways",
     "giveaway_entries",
     "kv",
+    "module_settings",
     "temp_voices",
     "birthdays",
     "scheduled_messages",
@@ -43,6 +44,10 @@ _TABLES = (
     "event_signup",
     "where_play",
     "caller_rooms",
+    "dossier_settings",
+    "admissions",
+    "dossier_drafts",
+    "dossiers",
 )
 _SEQUENCES = {
     "warns": "id",

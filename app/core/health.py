@@ -85,10 +85,10 @@ class HealthChecker:
             latency = self.bot.latency * 1000  # Convert to ms
 
             status = HealthStatus.HEALTHY
-            if latency > 1000:
-                status = HealthStatus.DEGRADED
-            elif latency > 5000:
+            if latency > 5000:
                 status = HealthStatus.UNHEALTHY
+            elif latency > 1000:
+                status = HealthStatus.DEGRADED
 
             elapsed = (time.monotonic() - start) * 1000
 
@@ -179,10 +179,10 @@ class HealthChecker:
         memory_mb = process.memory_info().rss / 1024 / 1024
 
         status = HealthStatus.HEALTHY
-        if memory_mb > 500:
-            status = HealthStatus.DEGRADED
-        elif memory_mb > 1000:
+        if memory_mb > 1000:
             status = HealthStatus.UNHEALTHY
+        elif memory_mb > 500:
+            status = HealthStatus.DEGRADED
 
         details = {
             "rss_mb": round(memory_mb, 2),

@@ -61,6 +61,17 @@ class ScheduledRepository(BaseRepository):
             (scheduled_id,),
         )
 
+    async def defer_claim(self, scheduled_id: int, seconds: int) -> None:
+        """Продлевает аренду вместо её сброса: повторная попытка доставки
+        произойдёт через ``seconds``, а не сразу в этом же такте."""
+        from datetime import UTC, datetime, timedelta
+
+        until = datetime.now(UTC) + timedelta(seconds=max(1, seconds))
+        await self.db.execute(
+            "UPDATE scheduled_messages SET processing_until = ? WHERE id = ? AND done = 0",
+            (until.isoformat(), scheduled_id),
+        )
+
     async def upcoming(self, limit: int = 100) -> list[ScheduledMessageRow]:
         rows = await self.db.fetchall("SELECT * FROM scheduled_messages WHERE done = 0 ORDER BY send_at LIMIT ?", (limit,))
         return [cast(ScheduledMessageRow, dict(row)) for row in rows]
