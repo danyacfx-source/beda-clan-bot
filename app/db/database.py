@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     created_at TEXT    NOT NULL,
     closed_at  TEXT,
     transcript TEXT,
-    voice_channel_id INTEGER
+    voice_channel_id INTEGER,
+    kind TEXT NOT NULL DEFAULT 'clan'
 );
 
 CREATE TABLE IF NOT EXISTS reminders (
@@ -446,6 +447,12 @@ class Database:
             if "mention_role_id" not in {row[1] for row in columns}:
                 await conn.execute("ALTER TABLE events ADD COLUMN mention_role_id INTEGER")
             await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (13, datetime('now'))")
+        if 14 not in applied:
+            # Отдельный тип тикета: существующие заявки остаются клановыми.
+            columns = await conn.execute_fetchall("PRAGMA table_info(tickets)")
+            if "kind" not in {row[1] for row in columns}:
+                await conn.execute("ALTER TABLE tickets ADD COLUMN kind TEXT NOT NULL DEFAULT 'clan'")
+            await conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (14, datetime('now'))")
         conn = self.conn
         cursor = await conn.execute("PRAGMA table_info(guild_settings)")
         rows = await cursor.fetchall()
