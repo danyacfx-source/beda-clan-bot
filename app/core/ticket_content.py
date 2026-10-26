@@ -35,6 +35,9 @@ CLAN_PANEL_BUTTON = "Расскажи немного о себе"
 
 CLAN_PANEL_EMOJI = "🐺"
 
+ACHIEVEMENT_BUTTON_LABEL = "Получение ачивки"
+ACHIEVEMENT_PROMPT = "Предоставьте видео откат или скриншот для получения ачивки"
+
 CLAN_INTRO_TITLE = "🐺 Заявка в клан [BEDA]"
 
 CLAN_INTRO_TEXT = (

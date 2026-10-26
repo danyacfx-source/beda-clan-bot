@@ -14,6 +14,7 @@ import discord
 
 from app.core import embeds
 from app.core.ticket_content import (
+    ACHIEVEMENT_PROMPT,
     CLAN_INTRO_FIELDS,
     CLAN_INTRO_FOOTER,
     CLAN_INTRO_INLINE,
@@ -62,8 +63,10 @@ class TicketService:
         self._config = config
         self._delete_tasks: set[asyncio.Task[None]] = set()
 
-    async def create(self, guild: discord.Guild, member: discord.Member) -> TicketCreateResult:
-        if await self._repo.has_open_by_creator(guild.id, member.id):
+    async def create(self, guild: discord.Guild, member: discord.Member, *, kind: str = "clan") -> TicketCreateResult:
+        if kind not in ("clan", "achievement"):
+            raise ValueError(f"Неизвестный тип тикета: {kind}")
+        if await self._repo.has_open_by_creator(guild.id, member.id, kind=kind):
             return TicketCreateResult(channel=None, error="У вас уже есть открытый тикет.")
 
         settings = await self._settings.get(guild.id)
@@ -88,8 +91,14 @@ class TicketService:
                     attach_files=True,
                     manage_messages=True,
                 )
-        name = re.sub(r"[^a-z0-9-]", "-", member.name.lower()).strip("-") or "ticket"
-        prefix = re.sub(r"[^a-z0-9-]", "-", (settings.get("ticket_channel_prefix") or "ticket").lower()).strip("-") or "ticket"
+        if kind == "achievement":
+            # Ник на сервере, включая кириллицу, для текстового канала ачивки.
+            nick = re.sub(r"[^\w-]+", "-", member.display_name.lower()).strip("-_") or str(member.id)
+            channel_name = f"ачивка-{nick}"[:100].rstrip("-_")
+        else:
+            name = re.sub(r"[^a-z0-9-]", "-", member.name.lower()).strip("-") or "ticket"
+            prefix = re.sub(r"[^a-z0-9-]", "-", (settings.get("ticket_channel_prefix") or "ticket").lower()).strip("-") or "ticket"
+            channel_name = f"{prefix}-{name}"
 
         # Голосовая комната видна только подавшему и ролям поддержки.
         voice_overwrites: dict[Any, discord.PermissionOverwrite] = {
@@ -108,7 +117,7 @@ class TicketService:
 
         try:
             channel = await guild.create_text_channel(
-                name=f"{prefix}-{name}",
+                name=channel_name,
                 category=category if isinstance(category, discord.CategoryChannel) else None,
                 overwrites=overwrites,
                 reason=f"Тикет от {member}",
@@ -120,51 +129,53 @@ class TicketService:
         # ломать создание тикета, но о факте пишем в интро и в лог.
         voice_channel: discord.VoiceChannel | None = None
         voice_error: str | None = None
-        try:
-            voice_channel = await guild.create_voice_channel(
-                name=f"{prefix}-{name}",
-                category=category if isinstance(category, discord.CategoryChannel) else None,
-                overwrites=voice_overwrites,
-                reason=f"Голосовая тикета от {member}",
-            )
-        except discord.HTTPException as exc:
-            voice_error = str(exc)
-            logger.warning("Не удалось создать голосовую к тикету %s: %s", member.id, exc)
+        if kind == "clan":
+            try:
+                voice_channel = await guild.create_voice_channel(
+                    name=channel_name,
+                    category=category if isinstance(category, discord.CategoryChannel) else None,
+                    overwrites=voice_overwrites,
+                    reason=f"Голосовая тикета от {member}",
+                )
+            except discord.HTTPException as exc:
+                voice_error = str(exc)
+                logger.warning("Не удалось создать голосовую к тикету %s: %s", member.id, exc)
 
         ticket_id: int | None = None
         try:
             now = datetime.now(UTC)
             ticket_id = await self._repo.create(
-                guild.id, channel.id, member.id, now, voice_channel.id if voice_channel else None
+                guild.id, channel.id, member.id, now, voice_channel.id if voice_channel else None, kind=kind
             )
 
-            intro_title = settings.get("ticket_intro_title") or CLAN_INTRO_TITLE
-            intro_text = (settings.get("ticket_intro_description") or CLAN_INTRO_TEXT).replace(
-                "{member}", member.mention
+            close_view = TicketCloseView(
+                self,
+                label=settings.get("ticket_close_label") or "Закрыть тикет",
+                emoji=settings.get("ticket_close_emoji"),
             )
-            intro = embeds.brand(
-                intro_title,
-                intro_text,
-                settings.get("ticket_intro_footer") or CLAN_INTRO_FOOTER,
-            )
-            for index, (name, value) in enumerate(CLAN_INTRO_FIELDS):
-                intro.add_field(name=name, value=value, inline=index < CLAN_INTRO_INLINE)
-            if voice_channel is not None:
-                intro.add_field(name="Голосовая", value=voice_channel.mention, inline=False)
-            elif voice_error:
-                intro.add_field(
-                    name="Голосовая",
-                    value="Не создана: недостаточно прав или достигнут лимит каналов.",
-                    inline=False,
+            if kind == "achievement":
+                await channel.send(content=ACHIEVEMENT_PROMPT, view=close_view)
+            else:
+                intro_title = settings.get("ticket_intro_title") or CLAN_INTRO_TITLE
+                intro_text = (settings.get("ticket_intro_description") or CLAN_INTRO_TEXT).replace(
+                    "{member}", member.mention
                 )
-            await channel.send(
-                embed=intro,
-                view=TicketCloseView(
-                    self,
-                    label=settings.get("ticket_close_label") or "Закрыть тикет",
-                    emoji=settings.get("ticket_close_emoji"),
-                ),
-            )
+                intro = embeds.brand(
+                    intro_title,
+                    intro_text,
+                    settings.get("ticket_intro_footer") or CLAN_INTRO_FOOTER,
+                )
+                for index, (field_name, value) in enumerate(CLAN_INTRO_FIELDS):
+                    intro.add_field(name=field_name, value=value, inline=index < CLAN_INTRO_INLINE)
+                if voice_channel is not None:
+                    intro.add_field(name="Голосовая", value=voice_channel.mention, inline=False)
+                elif voice_error:
+                    intro.add_field(
+                        name="Голосовая",
+                        value="Не создана: недостаточно прав или достигнут лимит каналов.",
+                        inline=False,
+                    )
+                await channel.send(embed=intro, view=close_view)
         except discord.HTTPException as exc:
             await self._rollback_failed_create(channel, voice_channel, ticket_id)
             return TicketCreateResult(channel=None, error=f"Discord API: {exc}")

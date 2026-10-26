@@ -99,6 +99,7 @@ class _Creator:
     def __init__(self, user_id: int, name: str) -> None:
         self.id = user_id
         self.name = name
+        self.display_name = name
         self.mention = f"<@{user_id}>"
 
     def __hash__(self) -> int:
@@ -125,6 +126,7 @@ async def test_create_and_persist_transcript(tmp_path) -> None:
         assert ticket is not None
         assert ticket["status"] == "open"
         assert ticket["creator_id"] == 42
+        assert ticket["kind"] == "clan"
 
         closed = await tickets.close_by_id(guild, ticket["ticket_id"], MagicMock(id=99, mention="<@99>"))
         assert closed is not None and closed.error is None
@@ -346,3 +348,55 @@ async def test_open_view_applies_custom_label():
     view = TicketOpenView(MagicMock(), label="Проблема?", emoji="")
     assert view.open_ticket.label == "Проблема?"
     assert view.open_ticket.emoji is None
+
+
+async def test_achievement_ticket_creates_only_text_channel_and_prompt(tmp_path) -> None:
+    from app.core.ticket_content import ACHIEVEMENT_PROMPT
+    from app.core.views import TicketCloseView
+
+    tickets, db = await _setup(str(tmp_path))
+    try:
+        clan_channel = _channel(600)
+        achievement_channel = _channel(601)
+        guild = _guild([clan_channel, achievement_channel])
+        guild.create_text_channel = AsyncMock(side_effect=[clan_channel, achievement_channel])
+        creator = _Creator(42, "vasya")
+        creator.display_name = "Вася Игрок"
+
+        clan_result = await tickets.create(guild, creator)
+        assert clan_result.error is None
+        assert clan_result.voice_channel is not None
+
+        result = await tickets.create(guild, creator, kind="achievement")
+        assert result.error is None
+        assert result.channel is achievement_channel
+        assert result.voice_channel is None
+        guild.create_voice_channel.assert_awaited_once()  # Только для заявки в клан.
+        kwargs = guild.create_text_channel.call_args.kwargs
+        assert kwargs["name"] == "ачивка-вася-игрок"
+        assert kwargs["overwrites"][creator].attach_files is True
+        assert kwargs["overwrites"][guild.default_role].view_channel is False
+        assert achievement_channel.send.call_args.kwargs["content"] == ACHIEVEMENT_PROMPT
+        assert isinstance(achievement_channel.send.call_args.kwargs["view"], TicketCloseView)
+
+        ticket = await tickets.get_open_ticket(GILD_ID, achievement_channel.id)
+        assert ticket is not None
+        assert ticket["kind"] == "achievement"
+        assert ticket["voice_channel_id"] is None
+        assert (await tickets.create(guild, creator, kind="achievement")).error is not None
+
+        closed = await tickets.close_by_id(guild, ticket["ticket_id"], MagicMock(id=99, mention="<@99>"))
+        assert closed.error is None
+    finally:
+        await tickets.aclose()
+        await db.close()
+
+
+def test_open_view_has_achievement_button():
+    from app.core.ticket_content import ACHIEVEMENT_BUTTON_LABEL
+    from app.core.views import TICKET_ACHIEVEMENT_ID, TicketOpenView
+
+    view = TicketOpenView(MagicMock())
+    assert view.achievement_ticket.label == ACHIEVEMENT_BUTTON_LABEL
+    assert view.achievement_ticket.custom_id == TICKET_ACHIEVEMENT_ID
+    assert view.timeout is None

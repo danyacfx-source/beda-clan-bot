@@ -25,7 +25,7 @@ async def test_database_migrations_integrity_and_backup(tmp_path: Path) -> None:
     row = await restored.fetchone("SELECT value FROM kv WHERE key = ?", ("health",))
     assert row is not None and row["value"] == "ok"
     migrations = await restored.fetchall("SELECT version FROM schema_migrations ORDER BY version")
-    assert [row["version"] for row in migrations] == list(range(1, 14))
+    assert [row["version"] for row in migrations] == list(range(1, 15))
     await restored.increment_activity(1, "2026-09-24T00:00:00+00:00")
     activity = await restored.list_activity(1)
     assert activity[0]["messages"] == 1
@@ -74,16 +74,19 @@ async def test_old_database_gains_ticket_voice_column(tmp_path: Path) -> None:
     try:
         columns = {row["name"] for row in await database.fetchall("PRAGMA table_info(tickets)")}
         assert "voice_channel_id" in columns
+        assert "kind" in columns
         # Старая строка на месте и не потеряла значений.
-        row = await database.fetchone("SELECT channel_id, creator_id, voice_channel_id FROM tickets")
+        row = await database.fetchone("SELECT channel_id, creator_id, voice_channel_id, kind FROM tickets")
         assert row["channel_id"] == 500
         assert row["creator_id"] == 42
         assert row["voice_channel_id"] is None
+        assert row["kind"] == "clan"
         versions = [
             int(r["version"])
             for r in await database.fetchall("SELECT version FROM schema_migrations ORDER BY version")
         ]
         assert 12 in versions
+        assert 14 in versions
     finally:
         await database.close()
 

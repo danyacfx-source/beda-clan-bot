@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS warns (
 CREATE TABLE IF NOT EXISTS tickets (
     ticket_id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL UNIQUE,
     creator_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL,
-    closed_at TEXT, transcript TEXT, voice_channel_id BIGINT
+    closed_at TEXT, transcript TEXT, voice_channel_id BIGINT,
+    kind TEXT NOT NULL DEFAULT 'clan'
 );
 CREATE TABLE IF NOT EXISTS reminders (
     id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, guild_id BIGINT, channel_id BIGINT,
@@ -175,9 +176,10 @@ CREATE INDEX IF NOT EXISTS idx_dossiers_status ON dossiers(status);
 -- Схема применяется только на создание таблиц, поэтому существующей базе
 -- колонку надо добавить отдельно: иначе бот упадёт на INSERT.
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS voice_channel_id BIGINT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'clan';
 ALTER TABLE events ADD COLUMN IF NOT EXISTS mention_role_id BIGINT;
 INSERT INTO schema_migrations(version, applied_at)
-SELECT version, CURRENT_TIMESTAMP::text FROM generate_series(1, 13) AS version
+SELECT version, CURRENT_TIMESTAMP::text FROM generate_series(1, 14) AS version
 ON CONFLICT (version) DO NOTHING;
 """
 

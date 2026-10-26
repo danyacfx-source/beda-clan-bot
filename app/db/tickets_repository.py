@@ -19,11 +19,12 @@ class TicketsRepository(BaseRepository):
         creator_id: int,
         created_at: datetime,
         voice_channel_id: int | None = None,
+        kind: str = "clan",
     ) -> int:
         cursor = await self.db.execute(
-            "INSERT INTO tickets (guild_id, channel_id, creator_id, created_at, voice_channel_id) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (guild_id, channel_id, creator_id, created_at.isoformat(), voice_channel_id),
+            "INSERT INTO tickets (guild_id, channel_id, creator_id, created_at, voice_channel_id, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (guild_id, channel_id, creator_id, created_at.isoformat(), voice_channel_id, kind),
         )
         if cursor.lastrowid is None:
             raise RuntimeError("SQLite не вернул ID тикета")
@@ -33,10 +34,10 @@ class TicketsRepository(BaseRepository):
         row = await self.db.fetchone("SELECT * FROM tickets WHERE channel_id = ?", (channel_id,))
         return cast(TicketRow, dict(row)) if row else None
 
-    async def has_open_by_creator(self, guild_id: int, creator_id: int) -> bool:
+    async def has_open_by_creator(self, guild_id: int, creator_id: int, *, kind: str = "clan") -> bool:
         row = await self.db.fetchone(
-            "SELECT 1 FROM tickets WHERE guild_id = ? AND creator_id = ? AND status = 'open' LIMIT 1",
-            (guild_id, creator_id),
+            "SELECT 1 FROM tickets WHERE guild_id = ? AND creator_id = ? AND kind = ? AND status = 'open' LIMIT 1",
+            (guild_id, creator_id, kind),
         )
         return row is not None
 
