@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 
 from app.core import embeds
+from app.core.ticket_content import ACHIEVEMENT_BUTTON_LABEL
 
 if TYPE_CHECKING:
     from app.services import Services
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("bot.views")
 
 TICKET_OPEN_ID = "ticket:open"
+TICKET_ACHIEVEMENT_ID = "ticket:achievement"
 TICKET_CLOSE_ID = "ticket:close"
 GIVEAWAY_ENTER_ID = "giveaway:enter"
 EVENT_SIGNUP_ID = "event:signup"
@@ -165,6 +167,29 @@ class TicketOpenView(_TicketBaseView):
         else:
             embed = embeds.success("Тикет открыт", f"Перейдите в {result.channel.mention} и опишите вопрос одним сообщением.")
             embed.add_field(name="КАНАЛ ПОДДЕРЖКИ", value=result.channel.mention, inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
+        label=ACHIEVEMENT_BUTTON_LABEL,
+        style=discord.ButtonStyle.primary,
+        custom_id=TICKET_ACHIEVEMENT_ID,
+        emoji="🏆",
+    )
+    async def achievement_ticket(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                embed=embeds.error("Не удалось открыть тикет", "Кнопка работает только на сервере."),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        result = await self.ticket_service.create(interaction.guild, interaction.user, kind="achievement")
+        if result.error:
+            embed = embeds.error("Не удалось открыть тикет", result.error)
+        elif result.channel is None:
+            embed = embeds.error("Не удалось открыть тикет", "Канал тикета не был создан.")
+        else:
+            embed = embeds.success("Тикет ачивки открыт", f"Прикрепите доказательства в {result.channel.mention}.")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
