@@ -2304,6 +2304,7 @@ class WebPanel:
             channel = guild.get_channel(row["channel_id"])
             item: dict[str, Any] = {
                 "id": row["ticket_id"],
+                "kind": row.get("kind", "clan"),
                 "creator_id": str(row["creator_id"]),
                 "creator_name": self._member_name(guild, row["creator_id"]),
                 "channel_id": str(row["channel_id"]),
