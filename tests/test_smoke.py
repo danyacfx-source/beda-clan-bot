@@ -78,6 +78,7 @@ async def test_bot_bootstrap():
                 "EventsCog",
                 "WherePlayCog",
                 "DossierCog",
+                "VacationsCog",
             ):
                 assert expected in cog_names, f"Не загружен ког {expected}"
 
@@ -94,6 +95,7 @@ async def test_bot_bootstrap():
                 "where_play_status",
                 "where_play_card",
                 "stop_play",
+                "setup_vacations",
                 "setup_dossiers",
                 "review_dossier",
                 "approve_interview",

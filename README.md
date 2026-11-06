@@ -17,6 +17,7 @@ Discord-бот для игрового клана: тикеты, личные д
 | Голос | временные каналы, лимит комнат, передача владения, панель управления |
 | Сообщество | опросы, розыгрыши, дни рождения, правила, счётчики сервера |
 | Сборы | `/event`, `/event_edit`, `/event_cancel`, `/event_list`, `/event_signup` |
+| Отпуска | `/setup_vacations` — панель заявок на отпуск, статус, продление и отмена |
 | Игроки | `/setup_where_play`, `/where_play`, `/stop_play`, `/where_play_status`, `/where_play_card` |
 | Личные дела | `/setup_dossiers`, `/approve_interview`, `/review_dossier` — анкета в клан и публикация в тред |
 | Напоминания | `/remindme`, `/remind`, `/remind_cancel`, `/remind_clear` — личные напоминания по времени |

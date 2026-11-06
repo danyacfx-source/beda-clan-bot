@@ -188,6 +188,26 @@ CREATE TABLE IF NOT EXISTS caller_rooms (
     updated_at TEXT    NOT NULL,
     PRIMARY KEY (guild_id, member_id)
 );
+
+CREATE TABLE IF NOT EXISTS vacations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    start_date TEXT    NOT NULL,
+    end_date   TEXT    NOT NULL,
+    reason     TEXT    NOT NULL DEFAULT '',
+    created_at TEXT    NOT NULL,
+    status     TEXT    NOT NULL DEFAULT 'active',
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_vacations_guild_status ON vacations(guild_id, status);
+
+CREATE TABLE IF NOT EXISTS vacation_settings (
+    guild_id         INTEGER PRIMARY KEY,
+    channel_id       INTEGER NOT NULL,
+    info_message_id  INTEGER,
+    panel_message_id INTEGER
+);
 """
 
 

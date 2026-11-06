@@ -44,6 +44,7 @@ def assemble(
     from app.db.settings_repository import SettingsRepository
     from app.db.temp_voices_repository import TempVoicesRepository
     from app.db.tickets_repository import TicketsRepository
+    from app.db.vacations_repository import VacationsRepository
     from app.db.warns_repository import WarnsRepository
     from app.db.where_play_repository import WherePlayRepository
     from app.services import Services
@@ -62,6 +63,7 @@ def assemble(
     from app.services.settings_service import SettingsService
     from app.services.temp_voice_service import TempVoiceService
     from app.services.ticket_service import TicketService
+    from app.services.vacation_service import VacationService
     from app.services.where_play_service import WherePlayService
 
     # --- Репозитории (слой данных) ---
@@ -100,6 +102,7 @@ def assemble(
     where_play = override_or(overrides, "where_play", WherePlayService, WherePlayRepository(db), bot)
     # Настройки «Где играем» читает сам сервис, а не ког: он валидирует коды.
     where_play.attach_module_settings(module_settings)
+    vacations = override_or(overrides, "vacations", VacationService, VacationsRepository(db), bot, logging_svc)
 
     services = Services(
         settings=settings,
@@ -118,6 +121,7 @@ def assemble(
         scheduled=scheduled,
         events=events,
         where_play=where_play,
+        vacations=vacations,
     )
 
     # --- Прошиваем корень в бота (то же, что делал контейнер через supplied) ---

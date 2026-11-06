@@ -29,6 +29,7 @@ from app.services.scheduler_service import ScheduledMessagesService
 from app.services.settings_service import SettingsService
 from app.services.temp_voice_service import TempVoiceService
 from app.services.ticket_service import TicketService
+from app.services.vacation_service import VacationService
 from app.services.where_play_service import WherePlayService
 
 
@@ -51,3 +52,4 @@ class Services:
     scheduled: ScheduledMessagesService
     events: EventService
     where_play: WherePlayService
+    vacations: VacationService

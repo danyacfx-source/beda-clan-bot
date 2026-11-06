@@ -25,6 +25,7 @@ _INSERT_PRIMARY_KEYS = {
     "scheduled_messages": "id",
     "moderation_cases": "case_id",
     "events": "id",
+    "vacations": "id",
 }
 _PARAM_RE = re.compile(r"\?")
 _TABLE_RE = re.compile(r"\bINSERT\s+INTO\s+([a-z_]+)\b", re.IGNORECASE)
@@ -173,6 +174,17 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at DES
 CREATE INDEX IF NOT EXISTS idx_activity_hourly_bucket ON activity_hourly(guild_id, bucket);
 CREATE INDEX IF NOT EXISTS idx_dossier_drafts_ticket ON dossier_drafts(guild_id, ticket_id);
 CREATE INDEX IF NOT EXISTS idx_dossiers_status ON dossiers(status);
+CREATE TABLE IF NOT EXISTS vacations (
+    id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
+    start_date TEXT NOT NULL, end_date TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active', updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_vacations_guild_status ON vacations(guild_id, status);
+CREATE TABLE IF NOT EXISTS vacation_settings (
+    guild_id BIGINT PRIMARY KEY, channel_id BIGINT NOT NULL,
+    info_message_id BIGINT, panel_message_id BIGINT
+);
 -- Схема применяется только на создание таблиц, поэтому существующей базе
 -- колонку надо добавить отдельно: иначе бот упадёт на INSERT.
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS voice_channel_id BIGINT;

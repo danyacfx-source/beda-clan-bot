@@ -175,3 +175,22 @@ class DossierRow(TypedDict):
     data: str
     thread_id: int | None
     status: str
+
+
+class VacationRow(TypedDict):
+    id: int
+    guild_id: int
+    user_id: int
+    start_date: str
+    end_date: str
+    reason: str
+    created_at: str
+    status: str  # 'active' | 'cancelled' | 'ended'
+    updated_at: str | None
+
+
+class VacationSettingsRow(TypedDict):
+    guild_id: int
+    channel_id: int
+    info_message_id: int | None
+    panel_message_id: int | None

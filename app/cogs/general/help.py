@@ -87,6 +87,7 @@ _CATEGORIES = (
                 "review_dossier",
                 "approve_interview",
                 "setup",
+                "setup_vacations",
                 "permissions",
                 "embed",
                 "scheduler",

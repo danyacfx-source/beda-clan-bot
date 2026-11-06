@@ -53,6 +53,7 @@ COG_PROVIDERS: dict[str, Callable[[ClanBot], object]] = {
     "birthdays": lambda b: _services(b).birthdays,
     "events": lambda b: _services(b).events,
     "where_play": lambda b: _services(b).where_play,
+    "vacations": lambda b: _services(b).vacations,
 }
 
 
@@ -175,10 +176,11 @@ async def _migrate_event_cards(bot: ClanBot, services: Services, events: list[Ev
 
 
 async def register_persistent_views(bot: ClanBot) -> None:
-    """Регистрирует кнопки тикетов, опросов, розыгрышей, ивентов и личных дел, которые переживают рестарт бота."""
+    """Регистрирует кнопки тикетов, опросов, розыгрышей, ивентов, личных дел и отпусков, которые переживают рестарт бота."""
     import json
 
     from app.cogs.administration.dossiers import AdmissionView, ApprovalView
+    from app.cogs.vacations.vacations import VacationPanelView
     from app.core.views import (
         EventSignupView,
         GiveawayView,
@@ -196,6 +198,8 @@ async def register_persistent_views(bot: ClanBot) -> None:
     bot.add_view(WherePlayCallerView(), message_id=None)
     bot.add_view(AdmissionView(services.dossiers), message_id=None)
     bot.add_view(ApprovalView(services.dossiers), message_id=None)
+    # Панель отпусков: кнопки работают после рестарта (фиксированные custom_id).
+    bot.add_view(VacationPanelView(services.vacations), message_id=None)
 
     giveaway_count = poll_count = event_count = 0
     for giveaway in await services.giveaways.active_with_message():
@@ -228,9 +232,9 @@ async def register_persistent_views(bot: ClanBot) -> None:
         asyncio.create_task(_migrate_event_cards(bot, services, stale_events))
 
     logger.info(
-        "Persistent views: тикеты 2, где играем 1, личные дела 2, розыгрыши %d, опросы %d, ивенты %d, всего %d",
+        "Persistent views: тикеты 2, где играем 1, личные дела 2, отпуска 1, розыгрыши %d, опросы %d, ивенты %d, всего %d",
         giveaway_count,
         poll_count,
         event_count,
-        5 + giveaway_count + poll_count + event_count,
+        6 + giveaway_count + poll_count + event_count,
     )
