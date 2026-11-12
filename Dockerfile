@@ -9,6 +9,22 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libopus0 libopus-dev curl ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/*
 
+# pg_dump для резервных копий PostgreSQL. Версия клиента совпадает с сервером
+# из docker-compose.yml (postgres:16): pg_dump отказывается выгружать сервер
+# новее себя, а в Debian по умолчанию другая версия. При смене образа
+# postgres обновите PG_CLIENT_VERSION.
+ARG PG_CLIENT_VERSION=16
+RUN install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "postgresql-client-${PG_CLIENT_VERSION}" \
+    && rm -rf /var/lib/apt/lists/* \
+    && pg_dump --version
+
 WORKDIR /app
 
 RUN addgroup --system bot \
