@@ -99,6 +99,7 @@ async def test_bot_bootstrap():
                 "setup_dossiers",
                 "review_dossier",
                 "approve_interview",
+                "dossier_card",
             ):
                 assert expected in command_names, f"Нет команды /{expected}"
 

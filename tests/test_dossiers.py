@@ -6,17 +6,23 @@ import os
 
 import pytest
 
+from app.cogs.administration.dossiers import TabButton, card_view, dossier_dynamic_items
 from app.db.database import Database
 from app.db.dossiers_repository import DossiersRepository
 from app.services.dossier_service import (
+    GEAR,
     SPECIALIZATIONS,
     DossierPermissionError,
     DossierService,
     DossierValidationError,
+    available_gear,
     dossier_card,
+    gear_embed,
+    profile_embed,
     review_card,
     specialization_asset,
     validate_dossier,
+    validate_gear,
 )
 from app.utils.text import clip, normalize_space, safe_component
 
@@ -149,7 +155,15 @@ def test_dossier_card_содержит_все_поля():
     embed, primary = dossier_card(_valid(), OWNER)
     assert primary == "Штурмовик"
     names = [field.name for field in embed.fields]
-    assert names == ["Ник", "Имя", "Steam ID", "Город", "Основная специализация", "Дополнительная специализация"]
+    assert names == [
+        "Имя",
+        "Играет с сезона",
+        "Основная роль",
+        "Дополнительная роль",
+        "Steam",
+        "Дата вступления",
+        "Город",
+    ]
     assert embed.image.url == "attachment://specialization.png"
 
 
@@ -310,3 +324,135 @@ class _Guild:
 class _Me:
     guild_permissions = type("P", (), {"manage_roles": False})()
     top_role = type("R", (), {})()
+
+
+# --- роли, снаряжение, интерактивная карточка ---
+
+async def _ready(repo, data=None):
+    await repo.reserve(GUILD, OWNER, json.dumps(data or _valid(), ensure_ascii=False))
+    await repo.set_thread(GUILD, OWNER, 777)
+    await repo.set_status(GUILD, OWNER, "ready")
+
+
+def test_специализации_и_каталог_снаряжения():
+    assert SPECIALIZATIONS == ("Штурмовик", "Медик", "Поддержка", "Пилот", "Водитель", "Снайпер")
+    assert set(GEAR) == set(SPECIALIZATIONS)
+    assert GEAR["Поддержка"][0] == "Мина" and len(GEAR["Поддержка"]) == 6
+
+
+def test_available_gear_основная_затем_дополнительная():
+    assert available_gear(_valid()) == [*GEAR["Штурмовик"], *GEAR["Медик"]]
+    assert available_gear({"primary": "Медик", "secondary": "Медик"}) == list(GEAR["Медик"])
+
+
+def test_validate_gear_порядок_каталога_и_чужое():
+    assert validate_gear(_valid(), ["Дефибриллятор", "M4"]) == ["M4", "Дефибриллятор"]
+    with pytest.raises(DossierValidationError):
+        validate_gear(_valid(), ["Apache"])
+    with pytest.raises(DossierValidationError):
+        validate_gear(_valid(), ["Несуществующее"])
+
+
+def test_алиасы_старых_ролей():
+    data = {**_valid(), "primary": "Механик", "secondary": "Строитель"}
+    cleaned = validate_dossier(data)
+    assert (cleaned["primary"], cleaned["secondary"]) == ("Водитель", "Поддержка")
+
+
+async def test_настройки_со_старыми_ключами(repo, service):
+    legacy = {"BEDA": 1, "Штурмовик": 2, "Медик": 3, "Механик": 4, "Строитель": 5, "Пилот": 6, "Снайпер": 7}
+    await repo.save_settings(GUILD, 500, json.dumps(legacy, ensure_ascii=False))
+    mapping = await service.settings(GUILD)
+    assert mapping["Водитель"] == 4 and mapping["Поддержка"] == 5
+    assert "Механик" not in mapping and set(SPECIALIZATIONS) <= set(mapping)
+
+
+async def test_card_требует_готового_дела(service):
+    with pytest.raises(DossierValidationError):
+        await service.card(GUILD, OWNER)
+
+
+async def test_update_profile_роли_без_регистра_и_очистка_снаряжения(repo, service):
+    await _ready(repo, {**_valid(), "gear": ["FAL", "Дефибриллятор"]})
+    data = await service.update_profile(
+        GUILD, OWNER, 5, nickname=" Новый ", season="3", primary=" медик ", secondary="МЕХАНИК"
+    )
+    assert (data["primary"], data["secondary"]) == ("Медик", "Водитель")
+    assert data["gear"] == ["Дефибриллятор"]
+    assert data["updated_by"] == 5 and data["updated_at"]
+    assert (await service.card(GUILD, OWNER))["nickname"] == "Новый"
+
+
+async def test_update_profile_ошибки(repo, service):
+    await _ready(repo)
+    with pytest.raises(DossierValidationError, match="Штурмовик"):
+        await service.update_profile(GUILD, OWNER, 5, nickname="a", season="", primary="Маг", secondary="Медик")
+    with pytest.raises(DossierValidationError, match="различаться"):
+        await service.update_profile(GUILD, OWNER, 5, nickname="a", season="", primary="Медик", secondary="медик")
+
+
+async def test_update_identity_дата_и_steam(repo, service):
+    await _ready(repo)
+    data = await service.update_identity(
+        GUILD, OWNER, 5, name="Пётр", steam_url="https://steamcommunity.com/id/x", joined_at="05.03.2025"
+    )
+    assert data["joined_at"] == "2025-03-05" and data["steam_url"].endswith("/id/x")
+    data = await service.update_identity(GUILD, OWNER, 5, name="Пётр", steam_url="", joined_at="2024-01-02")
+    assert data["joined_at"] == "2024-01-02" and data["steam_url"] == ""
+    with pytest.raises(DossierValidationError, match="Steam"):
+        await service.update_identity(GUILD, OWNER, 5, name="П", steam_url="http://evil.example", joined_at="")
+    with pytest.raises(DossierValidationError, match="Дата"):
+        await service.update_identity(GUILD, OWNER, 5, name="П", steam_url="", joined_at="31.02.2025")
+
+
+async def test_update_gear_сохраняется(repo, service):
+    await _ready(repo)
+    await service.update_gear(GUILD, OWNER, 5, ["M4", "FAL"])
+    assert (await service.card(GUILD, OWNER))["gear"] == ["FAL", "M4"]
+    with pytest.raises(DossierValidationError):
+        await service.update_gear(GUILD, OWNER, 5, ["Apache"])
+
+
+async def test_dossier_by_thread(repo):
+    await _ready(repo)
+    row = await repo.dossier_by_thread(GUILD, 777)
+    assert row is not None and int(row["owner_id"]) == OWNER
+    assert await repo.dossier_by_thread(GUILD, 1) is None
+
+
+def test_эмбеды_для_старых_данных():
+    legacy = {**_valid(), "primary": "Механик", "secondary": "Медик"}
+    embed = profile_embed(legacy, OWNER, None)
+    fields = {field.name: field.value for field in embed.fields}
+    assert fields["Основная роль"] == "Водитель"
+    assert fields["Играет с сезона"] == "Не заполнено" and fields["Steam"] == "76561198000000000"
+    assert embed.title == "Бэд" and embed.description == f"<@{OWNER}>"
+    assert embed.footer.text is None
+    gear = gear_embed(legacy, OWNER)
+    assert [field.name for field in gear.fields] == ["Водитель", "Медик"]
+    assert "⬜ Humvee" in gear.fields[0].value
+
+
+def test_эмбеды_с_новыми_данными():
+    data = {**_valid(), "steam_url": "https://steamcommunity.com/id/x", "joined_at": "2025-03-05",
+            "gear": ["M4"], "updated_at": "2026-01-01T00:00:00+00:00"}
+    embed = profile_embed(data, OWNER, "Админ")
+    fields = {field.name: field.value for field in embed.fields}
+    assert fields["Дата вступления"] == "05.03.2025" and "steamcommunity" in fields["Steam"]
+    assert embed.footer.text == "Обновил Админ · BEDA" and embed.timestamp is not None
+    assert "✅ M4" in gear_embed(data, OWNER).fields[0].value
+
+
+def test_custom_id_кнопок_вкладок():
+    assert dossier_dynamic_items() == (TabButton,)
+    for tab in ("profile", "gear", "edit"):
+        custom_id = TabButton(tab, OWNER).item.custom_id
+        match = TabButton.__discord_ui_compiled_template__.fullmatch(custom_id)
+        assert match is not None and match["tab"] == tab and int(match["owner"]) == OWNER
+
+
+async def test_card_view_активная_вкладка():
+    view = card_view(OWNER, "gear")
+    styles = {child.item.label: child.item.style.name for child in view.children}
+    assert styles == {"Профиль": "secondary", "Снаряжение": "primary", "Редактирование": "secondary"}
+    assert view.timeout is None

@@ -140,3 +140,16 @@ class DossiersRepository(BaseRepository):
             "UPDATE dossiers SET status = ? WHERE guild_id = ? AND owner_id = ?",
             (status, guild_id, owner_id),
         )
+
+    async def update_data(self, guild_id: int, owner_id: int, data: str) -> None:
+        await self.db.execute(
+            "UPDATE dossiers SET data = ? WHERE guild_id = ? AND owner_id = ?",
+            (data, guild_id, owner_id),
+        )
+
+    async def dossier_by_thread(self, guild_id: int, thread_id: int) -> DossierRow | None:
+        row = await self.db.fetchone(
+            "SELECT * FROM dossiers WHERE guild_id = ? AND thread_id = ?",
+            (guild_id, thread_id),
+        )
+        return cast(DossierRow, dict(row)) if row else None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -11,11 +13,18 @@ from discord import app_commands
 from app.core import embeds
 from app.core.base import ClanCog
 from app.services.dossier_service import (
+    GEAR,
+    GEAR_NOTE,
     SPECIALIZATIONS,
     DossierPermissionError,
     DossierService,
     DossierValidationError,
+    available_gear,
+    gear_embed,
+    normalize_specialization,
+    profile_embed,
     review_card,
+    specialization_asset,
     validate_dossier,
 )
 
@@ -31,15 +40,398 @@ ROLE_ARGUMENTS = {
     "beda": "Роль BEDA",
     "assault": "Штурмовик",
     "medic": "Медик",
-    "mechanic": "Механик",
-    "builder": "Строитель",
+    "support": "Поддержка",
     "pilot": "Пилот",
+    "driver": "Водитель",
     "sniper": "Снайпер",
 }
 
 
 def _error_text(error: DossierValidationError | DossierPermissionError) -> str:
     return error.user_message
+
+
+# --- интерактивная карточка личного дела ---
+
+TAB_LABELS = {"profile": "Профиль", "gear": "Снаряжение", "edit": "Редактирование"}
+TAB_ID = "beda:dossier:tab:{tab}:{owner}"
+EDIT_DENIED = "Редактировать может только владелец дела или администратор."
+
+
+def _service(interaction: discord.Interaction) -> DossierService:
+    services = interaction.client.services  # type: ignore[attr-defined]
+    return services.dossiers
+
+
+def _updated_by_name(guild: discord.Guild | None, data: dict[str, Any]) -> str | None:
+    actor = data.get("updated_by")
+    if not actor:
+        return None
+    member = guild.get_member(int(actor)) if guild is not None else None
+    return member.display_name if member else None
+
+
+def _tab_embed(guild: discord.Guild | None, data: dict[str, Any], owner_id: int, tab: str) -> discord.Embed:
+    if tab == "gear":
+        return gear_embed(data, owner_id)
+    return profile_embed(data, owner_id, _updated_by_name(guild, data))
+
+
+class TabButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"beda:dossier:tab:(?P<tab>profile|gear|edit):(?P<owner>[0-9]+)",
+):
+    """Вкладка карточки. custom_id несёт владельца дела, поэтому переживает перезапуск."""
+
+    def __init__(self, tab: str, owner_id: int, *, active: bool = False) -> None:
+        self.tab = tab
+        self.owner_id = owner_id
+        super().__init__(
+            discord.ui.Button(
+                label=TAB_LABELS[tab],
+                style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary,
+                custom_id=TAB_ID.format(tab=tab, owner=owner_id),
+                row=0,
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(
+        cls, interaction: discord.Interaction, item: discord.ui.Item, match: re.Match[str], /
+    ) -> TabButton:
+        return cls(match["tab"], int(match["owner"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        service = _service(interaction)
+        if self.tab == "edit":
+            await self._open_editor(interaction, service)
+            return
+        await interaction.response.defer()
+        guild = interaction.guild
+        try:
+            data = await service.card(int(interaction.guild_id or 0), self.owner_id)
+            if interaction.message is None:
+                return
+            await interaction.message.edit(
+                embed=_tab_embed(guild, data, self.owner_id, self.tab),
+                view=card_view(self.owner_id, self.tab),
+            )
+        except (DossierValidationError, DossierPermissionError) as error:
+            await interaction.followup.send(embed=embeds.error("Личное дело", _error_text(error)), ephemeral=True)
+        except Exception:
+            logger.exception("Не удалось переключить вкладку личного дела")
+            await interaction.followup.send(
+                embed=embeds.error("Личное дело", "Не удалось открыть вкладку. Подробности в консоли бота."),
+                ephemeral=True,
+            )
+
+    async def _open_editor(self, interaction: discord.Interaction, service: DossierService) -> None:
+        if not await _may_edit(interaction, service, self.owner_id):
+            await interaction.response.send_message(
+                embed=embeds.error("Редактирование", EDIT_DENIED), ephemeral=True
+            )
+            return
+        embed = embeds.info(
+            "Редактирование личного дела",
+            "Это ваше дело: вы можете обновить профиль и снаряжение.\n" + GEAR_NOTE,
+        )
+        await interaction.response.send_message(
+            embed=embed, view=EditMenuView(service, self.owner_id), ephemeral=True
+        )
+
+
+def card_view(owner_id: int, active_tab: str) -> discord.ui.View:
+    """Постоянная панель вкладок под карточкой личного дела."""
+    view = discord.ui.View(timeout=None)
+    for tab in TAB_LABELS:
+        view.add_item(TabButton(tab, owner_id, active=tab == active_tab))
+    return view
+
+
+def dossier_dynamic_items() -> tuple[type[discord.ui.DynamicItem], ...]:
+    """Динамические кнопки для ``bot.add_dynamic_items`` (регистрируются при старте)."""
+    return (TabButton,)
+
+
+async def _may_edit(interaction: discord.Interaction, service: DossierService, owner_id: int) -> bool:
+    user = interaction.user
+    return isinstance(user, discord.Member) and await service.can_edit(user, owner_id)
+
+
+async def refresh_card(
+    guild: discord.Guild,
+    service: DossierService,
+    owner_id: int,
+    data: dict[str, Any],
+    *,
+    tab: str,
+    reattach: bool,
+) -> None:
+    """Перерисовать стартовое сообщение треда: embed вкладки, кнопки и (при смене роли) картинку."""
+    thread_id = await service.thread_id(guild.id, owner_id)
+    if thread_id is None:
+        raise DossierValidationError("У личного дела нет треда.")
+    thread = guild.get_channel_or_thread(thread_id) or await guild.fetch_channel(thread_id)
+    if not isinstance(thread, discord.Thread):
+        raise DossierValidationError("Тред личного дела не найден.")
+    message = await thread.fetch_message(thread.id)  # у форумного треда id стартового сообщения == id треда
+    kwargs: dict[str, Any] = {
+        "embed": _tab_embed(guild, data, owner_id, tab),
+        "view": card_view(owner_id, tab),
+    }
+    file: discord.File | None = None
+    if reattach:
+        primary = normalize_specialization(data.get("primary")) or str(data.get("primary"))
+        file = discord.File(specialization_asset(primary), filename="specialization.png")
+        kwargs["attachments"] = [file]
+    try:
+        await message.edit(**kwargs)
+    finally:
+        if file is not None:
+            file.close()
+
+
+async def _apply_update(
+    interaction: discord.Interaction,
+    service: DossierService,
+    owner_id: int,
+    update: Callable[[], Awaitable[dict[str, Any]]],
+    *,
+    tab: str,
+    title: str,
+) -> None:
+    """Общий конвейер сохранения: права → сервис → обновление карточки → ответ."""
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    if guild is None:
+        return
+    if not await _may_edit(interaction, service, owner_id):
+        await interaction.followup.send(embed=embeds.error(title, EDIT_DENIED), ephemeral=True)
+        return
+    try:
+        old = await service.card(guild.id, owner_id)
+        data = await update()
+    except (DossierValidationError, DossierPermissionError) as error:
+        await interaction.followup.send(embed=embeds.error(title, _error_text(error)), ephemeral=True)
+        return
+    except Exception:
+        logger.exception("Не удалось сохранить личное дело")
+        await interaction.followup.send(
+            embed=embeds.error(title, "Не удалось сохранить изменения. Подробности в консоли бота."),
+            ephemeral=True,
+        )
+        return
+    changed_role = normalize_specialization(old.get("primary")) != normalize_specialization(data.get("primary"))
+    try:
+        await refresh_card(guild, service, owner_id, data, tab=tab, reattach=changed_role)
+    except Exception:
+        logger.warning("Не удалось обновить карточку личного дела owner=%s", owner_id, exc_info=True)
+    await interaction.followup.send(embed=embeds.success(title, "Изменения сохранены."), ephemeral=True)
+
+
+class ProfileModal(discord.ui.Modal, title="Редактировать профиль"):
+    def __init__(self, service: DossierService, owner_id: int, data: dict[str, Any]) -> None:
+        super().__init__()
+        self.service = service
+        self.owner_id = owner_id
+        roles = ", ".join(SPECIALIZATIONS)
+        self.nickname = discord.ui.TextInput(
+            label="Позывной", max_length=60, default=str(data.get("nickname") or "")
+        )
+        self.season = discord.ui.TextInput(
+            label="Играет с сезона",
+            required=False,
+            max_length=60,
+            placeholder="Первый сезон участия",
+            default=str(data.get("season") or "") or None,
+        )
+        self.primary = discord.ui.TextInput(
+            label="Основная роль",
+            max_length=30,
+            placeholder=roles,
+            default=normalize_specialization(data.get("primary")) or str(data.get("primary") or ""),
+        )
+        self.secondary = discord.ui.TextInput(
+            label="Дополнительная роль",
+            max_length=30,
+            placeholder=roles,
+            default=normalize_specialization(data.get("secondary")) or str(data.get("secondary") or ""),
+        )
+        for item in (self.nickname, self.season, self.primary, self.secondary):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await _apply_update(
+            interaction,
+            self.service,
+            self.owner_id,
+            lambda: self.service.update_profile(
+                int(interaction.guild_id or 0),
+                self.owner_id,
+                int(interaction.user.id),
+                nickname=str(self.nickname),
+                season=str(self.season),
+                primary=str(self.primary),
+                secondary=str(self.secondary),
+            ),
+            tab="profile",
+            title="Профиль",
+        )
+
+
+class IdentityModal(discord.ui.Modal, title="Имя, Steam и дата"):
+    def __init__(self, service: DossierService, owner_id: int, data: dict[str, Any]) -> None:
+        super().__init__()
+        self.service = service
+        self.owner_id = owner_id
+        joined = ""
+        if data.get("joined_at"):
+            joined = _format_date(str(data["joined_at"]))
+        self.name = discord.ui.TextInput(label="Имя человека", max_length=60, default=str(data.get("name") or ""))
+        self.steam_url = discord.ui.TextInput(
+            label="Ссылка на Steam-профиль",
+            required=False,
+            max_length=200,
+            placeholder="https://steamcommunity.com/id/...",
+            default=str(data.get("steam_url") or "") or None,
+        )
+        self.joined_at = discord.ui.TextInput(
+            label="Дата вступления в клан",
+            required=False,
+            max_length=10,
+            placeholder="ДД.ММ.ГГГГ",
+            default=joined or None,
+        )
+        for item in (self.name, self.steam_url, self.joined_at):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await _apply_update(
+            interaction,
+            self.service,
+            self.owner_id,
+            lambda: self.service.update_identity(
+                int(interaction.guild_id or 0),
+                self.owner_id,
+                int(interaction.user.id),
+                name=str(self.name),
+                steam_url=str(self.steam_url),
+                joined_at=str(self.joined_at),
+            ),
+            tab="profile",
+            title="Имя, Steam и дата",
+        )
+
+
+def _format_date(iso: str) -> str:
+    parts = iso.split("-")
+    return ".".join(reversed(parts)) if len(parts) == 3 else iso
+
+
+class EditMenuView(discord.ui.View):
+    """Эфемерное меню редактирования: открывает модалки и выбор снаряжения."""
+
+    def __init__(self, service: DossierService, owner_id: int) -> None:
+        super().__init__(timeout=900)
+        self.service = service
+        self.owner_id = owner_id
+
+    async def _guard(self, interaction: discord.Interaction) -> dict[str, Any] | None:
+        """Права перепроверяются на каждом шаге, а не только при открытии меню."""
+        if not await _may_edit(interaction, self.service, self.owner_id):
+            await interaction.response.send_message(embed=embeds.error("Редактирование", EDIT_DENIED), ephemeral=True)
+            return None
+        try:
+            return await self.service.card(int(interaction.guild_id or 0), self.owner_id)
+        except DossierValidationError as error:
+            await interaction.response.send_message(
+                embed=embeds.error("Редактирование", _error_text(error)), ephemeral=True
+            )
+            return None
+        except Exception:
+            logger.exception("Не удалось прочитать личное дело")
+            await interaction.response.send_message(
+                embed=embeds.error("Редактирование", "Не удалось прочитать личное дело. Подробности в консоли бота."),
+                ephemeral=True,
+            )
+            return None
+
+    @discord.ui.button(label="Изменить профиль", style=discord.ButtonStyle.primary)
+    async def profile(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        data = await self._guard(interaction)
+        if data is not None:
+            await interaction.response.send_modal(ProfileModal(self.service, self.owner_id, data))
+
+    @discord.ui.button(label="Имя, Steam и дата", style=discord.ButtonStyle.secondary)
+    async def identity(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        data = await self._guard(interaction)
+        if data is not None:
+            await interaction.response.send_modal(IdentityModal(self.service, self.owner_id, data))
+
+    @discord.ui.button(label="Отметить снаряжение", style=discord.ButtonStyle.secondary)
+    async def gear(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        data = await self._guard(interaction)
+        if data is None:
+            return
+        if not available_gear(data):
+            await interaction.response.send_message(
+                embed=embeds.info("Снаряжение", "Для ваших ролей нет снаряжения для отметки."), ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            embed=embeds.info("Выберите фактически открытые предметы", GEAR_NOTE),
+            view=GearSelectView(self.service, self.owner_id, data),
+            ephemeral=True,
+        )
+
+
+class GearSelect(discord.ui.Select):
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: GearSelectView = self.view  # type: ignore[assignment]
+        view.selected = list(self.values)
+        for option in self.options:
+            option.default = option.value in view.selected
+        await interaction.response.edit_message(view=view)
+
+
+class GearSelectView(discord.ui.View):
+    def __init__(self, service: DossierService, owner_id: int, data: dict[str, Any]) -> None:
+        super().__init__(timeout=900)
+        self.service = service
+        self.owner_id = owner_id
+        owned = set(data.get("gear") or [])
+        role_of = {item: role for role, items in GEAR.items() for item in items}
+        items = available_gear(data)
+        self.selected = [item for item in items if item in owned]
+        select = GearSelect(
+            placeholder="Открытое снаряжение",
+            min_values=0,
+            max_values=len(items),
+            options=[
+                discord.SelectOption(label=item, value=item, description=role_of.get(item), default=item in owned)
+                for item in items
+            ],
+        )
+        self.add_item(select)
+
+    @discord.ui.button(label="Применить", style=discord.ButtonStyle.primary, row=1)
+    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _apply_update(
+            interaction,
+            self.service,
+            self.owner_id,
+            lambda: self.service.update_gear(
+                int(interaction.guild_id or 0), self.owner_id, int(interaction.user.id), self.selected
+            ),
+            tab="gear",
+            title="Снаряжение",
+        )
+        self.stop()
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="Отменено.", embed=None, view=None)
+        self.stop()
 
 
 class DossierModal(discord.ui.Modal, title="Личное дело"):
@@ -269,6 +661,37 @@ class DossierCog(ClanCog, name="Dossiers"):
         return [AdmissionView(self.dossiers), ApprovalView(self.dossiers)]
 
     @app_commands.command(
+        name="dossier_card",
+        description="Обновить карточку личного дела участника (добавить кнопки)",
+    )
+    @app_commands.describe(member="Участник, чьё личное дело нужно обновить")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def dossier_card(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        if guild is None:
+            return
+        try:
+            data = await self.dossiers.card(guild.id, member.id)
+            await refresh_card(guild, self.dossiers, member.id, data, tab="profile", reattach=True)
+        except (DossierValidationError, DossierPermissionError) as error:
+            await interaction.followup.send(embed=embeds.error("Личное дело", _error_text(error)), ephemeral=True)
+            return
+        except Exception:
+            logger.exception("Не удалось обновить карточку личного дела")
+            await interaction.followup.send(
+                embed=embeds.error("Личное дело", "Не удалось обновить карточку. Подробности в консоли бота."),
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            embed=embeds.success("Карточка обновлена", f"Личное дело {member.mention} обновлено."),
+            ephemeral=True,
+        )
+
+    @app_commands.command(
         name="setup_dossiers",
         description="Настроить форум личных дел и роли",
     )
@@ -286,9 +709,9 @@ class DossierCog(ClanCog, name="Dossiers"):
         beda: discord.Role,
         assault: discord.Role,
         medic: discord.Role,
-        mechanic: discord.Role,
-        builder: discord.Role,
+        support: discord.Role,
         pilot: discord.Role,
+        driver: discord.Role,
         sniper: discord.Role,
     ) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -298,7 +721,7 @@ class DossierCog(ClanCog, name="Dossiers"):
         mapping = dict(
             zip(
                 ("BEDA", *SPECIALIZATIONS),
-                (role.id for role in (beda, assault, medic, mechanic, builder, pilot, sniper)),
+                (role.id for role in (beda, assault, medic, support, pilot, driver, sniper)),
                 strict=True,
             )
         )
@@ -322,7 +745,7 @@ class DossierCog(ClanCog, name="Dossiers"):
                     for label, role in (
                         ("Форум", forum),
                         ("BEDA", beda),
-                        *zip(SPECIALIZATIONS, (assault, medic, mechanic, builder, pilot, sniper), strict=True),
+                        *zip(SPECIALIZATIONS, (assault, medic, support, pilot, driver, sniper), strict=True),
                     )
                 ),
             ),
