@@ -340,17 +340,23 @@ def test_специализации_и_каталог_снаряжения():
     assert GEAR["Поддержка"][0] == "Мина" and len(GEAR["Поддержка"]) == 6
 
 
-def test_available_gear_основная_затем_дополнительная():
-    assert available_gear(_valid()) == [*GEAR["Штурмовик"], *GEAR["Медик"]]
-    assert available_gear({"primary": "Медик", "secondary": "Медик"}) == list(GEAR["Медик"])
+def test_каталог_снаряжения_помещается_в_выбор():
+    assert len(available_gear()) <= 25
+    assert available_gear() == [item for items in GEAR.values() for item in items]
 
 
-def test_validate_gear_порядок_каталога_и_чужое():
-    assert validate_gear(_valid(), ["Дефибриллятор", "M4"]) == ["M4", "Дефибриллятор"]
+def test_validate_gear_любой_предмет_каталога_порядок_каталога():
+    order = available_gear()
+    picked = validate_gear(["Apache", "Дефибриллятор", "M4", "M4"])
+    assert picked == [item for item in order if item in picked] and len(picked) == 3
+    catalog = available_gear()
+    assert validate_gear(list(reversed(catalog))) == catalog
+    assert validate_gear([]) == []
+
+
+def test_validate_gear_неизвестный_предмет():
     with pytest.raises(DossierValidationError):
-        validate_gear(_valid(), ["Apache"])
-    with pytest.raises(DossierValidationError):
-        validate_gear(_valid(), ["Несуществующее"])
+        validate_gear(["Несуществующее"])
 
 
 def test_алиасы_старых_ролей():
@@ -372,15 +378,28 @@ async def test_card_требует_готового_дела(service):
         await service.card(GUILD, OWNER)
 
 
-async def test_update_profile_роли_без_регистра_и_очистка_снаряжения(repo, service):
+async def test_update_profile_роли_без_регистра_снаряжение_сохраняется(repo, service):
     await _ready(repo, {**_valid(), "gear": ["FAL", "Дефибриллятор"]})
     data = await service.update_profile(
         GUILD, OWNER, 5, nickname=" Новый ", season="3", primary=" медик ", secondary="МЕХАНИК"
     )
     assert (data["primary"], data["secondary"]) == ("Медик", "Водитель")
-    assert data["gear"] == ["Дефибриллятор"]
+    assert data["gear"] == ["FAL", "Дефибриллятор"]
     assert data["updated_by"] == 5 and data["updated_at"]
     assert (await service.card(GUILD, OWNER))["nickname"] == "Новый"
+
+
+async def test_любое_снаряжение_принимается_независимо_от_ролей(repo, service):
+    await _ready(repo)
+    await service.update_gear(GUILD, OWNER, 5, ["Apache", "AMR .50"])
+    data = await service.update_profile(
+        GUILD, OWNER, 5, nickname="a", season="", primary="Пилот", secondary="Снайпер"
+    )
+    assert data["gear"] == ["Apache", "AMR .50"]
+    data = await service.update_profile(
+        GUILD, OWNER, 5, nickname="a", season="", primary="Медик", secondary="Водитель"
+    )
+    assert data["gear"] == ["Apache", "AMR .50"]
 
 
 async def test_update_profile_ошибки(repo, service):
@@ -407,10 +426,12 @@ async def test_update_identity_дата_и_steam(repo, service):
 
 async def test_update_gear_сохраняется(repo, service):
     await _ready(repo)
-    await service.update_gear(GUILD, OWNER, 5, ["M4", "FAL"])
-    assert (await service.card(GUILD, OWNER))["gear"] == ["FAL", "M4"]
+    await service.update_gear(GUILD, OWNER, 5, ["Apache", "M4", "FAL"])
+    assert (await service.card(GUILD, OWNER))["gear"] == [
+        item for item in available_gear() if item in {"Apache", "FAL", "M4"}
+    ]
     with pytest.raises(DossierValidationError):
-        await service.update_gear(GUILD, OWNER, 5, ["Apache"])
+        await service.update_gear(GUILD, OWNER, 5, ["Несуществующее"])
 
 
 async def test_dossier_by_thread(repo):
@@ -429,8 +450,8 @@ def test_эмбеды_для_старых_данных():
     assert embed.title == "Бэд" and embed.description == f"<@{OWNER}>"
     assert embed.footer.text is None
     gear = gear_embed(legacy, OWNER)
-    assert [field.name for field in gear.fields] == ["Водитель", "Медик"]
-    assert "⬜ Humvee" in gear.fields[0].value
+    assert [field.name for field in gear.fields] == list(GEAR)
+    assert "⬜ Humvee" in next(f.value for f in gear.fields if f.name == "Водитель")
 
 
 def test_эмбеды_с_новыми_данными():
@@ -440,7 +461,8 @@ def test_эмбеды_с_новыми_данными():
     fields = {field.name: field.value for field in embed.fields}
     assert fields["Дата вступления"] == "05.03.2025" and "steamcommunity" in fields["Steam"]
     assert embed.footer.text == "Обновил Админ · BEDA" and embed.timestamp is not None
-    assert "✅ M4" in gear_embed(data, OWNER).fields[0].value
+    gear_fields = {field.name: field.value for field in gear_embed(data, OWNER).fields}
+    assert "✅ M4" in gear_fields["Штурмовик"] and "⬜ FAL" in gear_fields["Штурмовик"]
 
 
 def test_custom_id_кнопок_вкладок():

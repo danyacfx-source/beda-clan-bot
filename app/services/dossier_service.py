@@ -141,28 +141,18 @@ def _member_roles(data: dict[str, Any]) -> list[str]:
     return roles
 
 
-def available_gear(data: dict[str, Any]) -> list[str]:
-    """Снаряжение ролей участника: сначала основной, затем дополнительной."""
-    items: list[str] = []
-    for role in _member_roles(data):
-        for item in GEAR.get(role, ()):
-            if item not in items:
-                items.append(item)
-    return items
+def available_gear() -> list[str]:
+    """Весь каталог снаряжения в порядке категорий."""
+    return [item for items in GEAR.values() for item in items]
 
 
-def validate_gear(data: dict[str, Any], selected: list[str]) -> list[str]:
-    """Оставить отмеченное снаряжение в порядке каталога; чужие предметы — ошибка."""
-    allowed = available_gear(data)
-    unknown = [item for item in selected if item not in allowed]
+def validate_gear(selected: list[str]) -> list[str]:
+    """Оставить отмеченное снаряжение в порядке каталога; предметы вне каталога — ошибка."""
+    catalog = available_gear()
+    unknown = [item for item in selected if item not in catalog]
     if unknown:
-        raise DossierValidationError("Это снаряжение недоступно для ваших ролей: " + ", ".join(unknown))
-    return [item for item in allowed if item in selected]
-
-
-def _prune_gear(data: dict[str, Any]) -> None:
-    allowed = available_gear(data)
-    data["gear"] = [item for item in allowed if item in (data.get("gear") or [])]
+        raise DossierValidationError("Неизвестное снаряжение: " + ", ".join(unknown))
+    return [item for item in catalog if item in selected]
 
 
 def parse_joined_at(value: str) -> str:
@@ -297,7 +287,7 @@ def profile_embed(data: dict[str, Any], owner: int, updated_by_name: str | None 
 
 
 def gear_embed(data: dict[str, Any], owner: int) -> discord.Embed:
-    """Вкладка «Снаряжение»: все предметы ролей участника, отмеченные — галочкой."""
+    """Вкладка «Снаряжение»: весь каталог по категориям, отмеченное — галочкой."""
     owned = set(data.get("gear") or [])
     embed = discord.Embed(
         title=clip(_text(data.get("nickname"), "Без позывного"), 256),
@@ -305,9 +295,9 @@ def gear_embed(data: dict[str, Any], owner: int) -> discord.Embed:
         color=EMBED_COLOR,
     )
     embed.set_author(name="BEDA · СНАРЯЖЕНИЕ")
-    for role in _member_roles(data):
-        lines = [f"{'✅' if item in owned else '⬜'} {item}" for item in GEAR.get(role, ())]
-        embed.add_field(name=role, value="\n".join(lines) or "—", inline=True)
+    for category, items in GEAR.items():
+        lines = [f"{'✅' if item in owned else '⬜'} {item}" for item in items]
+        embed.add_field(name=category, value="\n".join(lines), inline=True)
     embed.set_image(url="attachment://specialization.png")
     return embed
 
@@ -727,7 +717,7 @@ class DossierService(BaseService["DossiersRepository"]):
         primary: str,
         secondary: str,
     ) -> dict[str, Any]:
-        """Обновить позывной, сезон и роли; снаряжение недоступных ролей сбрасывается."""
+        """Обновить позывной, сезон и роли."""
         data = await self._load(guild_id, owner_id)
         nickname = normalize_space(nickname)
         season = normalize_space(season)
@@ -744,7 +734,6 @@ class DossierService(BaseService["DossiersRepository"]):
         if roles[0] == roles[1]:
             raise DossierValidationError("Основная и дополнительная роли должны различаться.")
         data.update(nickname=nickname, season=season, primary=roles[0], secondary=roles[1])
-        _prune_gear(data)
         return await self._save(guild_id, owner_id, actor_id, data)
 
     async def update_identity(
@@ -771,7 +760,7 @@ class DossierService(BaseService["DossiersRepository"]):
     ) -> dict[str, Any]:
         """Сохранить отмеченное снаряжение."""
         data = await self._load(guild_id, owner_id)
-        data["gear"] = validate_gear(data, list(selected))
+        data["gear"] = validate_gear(list(selected))
         return await self._save(guild_id, owner_id, actor_id, data)
 
     async def dossier_count(self, guild_id: int) -> int:
