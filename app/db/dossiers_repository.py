@@ -112,6 +112,14 @@ class DossiersRepository(BaseRepository):
         )
         return cast(DossierRow, dict(row)) if row else None
 
+    async def dossiers_for_guild(self, guild_id: int) -> list[DossierRow]:
+        """Все дела гильдии (для массового сброса нового сезона)."""
+        rows = await self.db.fetchall(
+            "SELECT guild_id, owner_id, data, thread_id, status FROM dossiers WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return [cast(DossierRow, dict(row)) for row in rows]
+
     async def reserve(self, guild_id: int, owner_id: int, data: str) -> None:
         """Зарезервировать место под публикацию до создания треда.
 
@@ -140,3 +148,16 @@ class DossiersRepository(BaseRepository):
             "UPDATE dossiers SET status = ? WHERE guild_id = ? AND owner_id = ?",
             (status, guild_id, owner_id),
         )
+
+    async def update_data(self, guild_id: int, owner_id: int, data: str) -> None:
+        await self.db.execute(
+            "UPDATE dossiers SET data = ? WHERE guild_id = ? AND owner_id = ?",
+            (data, guild_id, owner_id),
+        )
+
+    async def dossier_by_thread(self, guild_id: int, thread_id: int) -> DossierRow | None:
+        row = await self.db.fetchone(
+            "SELECT * FROM dossiers WHERE guild_id = ? AND thread_id = ?",
+            (guild_id, thread_id),
+        )
+        return cast(DossierRow, dict(row)) if row else None

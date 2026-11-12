@@ -48,7 +48,11 @@ _TABLES = (
     "admissions",
     "dossier_drafts",
     "dossiers",
+    "vacations",
+    "vacation_settings",
 )
+# schema_migrations намеренно не переносится: PostgresDatabase.connect() сам
+# отмечает все миграции как применённые.
 _SEQUENCES = {
     "warns": "id",
     "tickets": "ticket_id",
@@ -59,6 +63,7 @@ _SEQUENCES = {
     "moderation_cases": "case_id",
     "admin_audit": "id",
     "events": "id",
+    "vacations": "id",
 }
 
 

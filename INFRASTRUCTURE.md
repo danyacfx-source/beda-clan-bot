@@ -28,6 +28,13 @@ docker compose logs -f bot
 Compose поднимает бота и (по профилю `postgres`) PostgreSQL. Веб-панель внутри
 сети, наружу не публикуется — доступ только через SSH-туннель или VPN.
 
+### Без systemd и Docker (SSH-консоль)
+
+`scripts/run.sh --background` запускает бота с автоперезапуском (логи — `logs/bot.log`,
+PID — `data/bot.pid`), `scripts/stop.sh` останавливает. База в общем PostgreSQL:
+`scripts/pg_create_db.sh`, загрузка дампа — `scripts/pg_import_dump.sh`.
+Пошаговая инструкция переезда — [MIGRATION.md](MIGRATION.md).
+
 ### Бэкапы
 
 SQLite-копии создаются автоматически (`DB_BACKUP_DIR`, `DB_BACKUP_INTERVAL_HOURS`,
