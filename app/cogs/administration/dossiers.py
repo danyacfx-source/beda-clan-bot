@@ -35,6 +35,7 @@ logger = logging.getLogger("bot.dossiers")
 
 DOSSIER_FILL_ID = "beda:dossier:form:v1"
 DOSSIER_APPROVE_ID = "beda:approve:v2"
+DOSSIER_SELF_ID = "beda:dossier:self:v1"
 
 ROLE_ARGUMENTS = {
     "beda": "Роль BEDA",
@@ -287,7 +288,12 @@ class IdentityModal(discord.ui.Modal, title="Имя, Steam и дата"):
         joined = ""
         if data.get("joined_at"):
             joined = _format_date(str(data["joined_at"]))
-        self.name = discord.ui.TextInput(label="Имя человека", max_length=60, default=str(data.get("name") or ""))
+        self.name = discord.ui.TextInput(
+            label="Имя человека",
+            max_length=60,
+            required=data.get("source") != "direct",
+            default=str(data.get("name") or "") or None,
+        )
         self.steam_url = discord.ui.TextInput(
             label="Ссылка на Steam-профиль",
             required=False,
@@ -648,6 +654,139 @@ class AdminCreateView(discord.ui.View):
         )
 
 
+DIRECT_HINT = "Остальное заполните через «Редактирование» на карточке."
+
+
+async def _send_direct_result(
+    interaction: discord.Interaction, title: str, outcome: str, thread_id: int
+) -> None:
+    if outcome == "roles_pending":
+        await interaction.followup.send(
+            embed=embeds.error(
+                "Роли не выданы",
+                f"Дело создано: <#{thread_id}>, но бот не смог выдать роли. Выдайте роли BEDA и специализаций вручную.",
+            ),
+            ephemeral=True,
+        )
+        return
+    await interaction.followup.send(
+        embed=embeds.success(title, f"<#{thread_id}>\n{DIRECT_HINT}"), ephemeral=True
+    )
+
+
+async def _send_failure(interaction: discord.Interaction, title: str, error: Exception) -> None:
+    if isinstance(error, DossierValidationError | DossierPermissionError):
+        embed = embeds.error(title, _error_text(error))
+    else:
+        logger.exception("Не удалось создать личное дело", exc_info=error)
+        embed = embeds.error(title, "Не удалось создать личное дело. Подробности в консоли бота.")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class _SelfRoleSelect(discord.ui.Select):
+    def __init__(self, key: str, placeholder: str, row: int) -> None:
+        super().__init__(
+            placeholder=placeholder,
+            options=[discord.SelectOption(label=value) for value in SPECIALIZATIONS],
+            row=row,
+        )
+        self.key = key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: SelfDossierView = self.view  # type: ignore[assignment]
+        view.chosen[self.key] = self.values[0]
+        for option in self.options:
+            option.default = option.value == self.values[0]
+        await interaction.response.edit_message(view=view)
+
+
+class SelfDossierView(discord.ui.View):
+    """Эфемерный выбор двух ролей для самостоятельного создания дела."""
+
+    def __init__(self, service: DossierService) -> None:
+        super().__init__(timeout=600)
+        self.service = service
+        self.chosen: dict[str, str] = {}
+        self._busy = False
+        self.add_item(_SelfRoleSelect("primary", "Основная роль", 0))
+        self.add_item(_SelfRoleSelect("secondary", "Дополнительная роль", 1))
+
+    @discord.ui.button(label="Создать", style=discord.ButtonStyle.success, row=2)
+    async def create(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        guild, member = interaction.guild, interaction.user
+        if guild is None or not isinstance(member, discord.Member) or self._busy:
+            return
+        self._busy = True
+        try:
+            reason = await self.service.self_create_block_reason(guild, member, throttle=False)
+            if reason:
+                self._busy = False
+                await interaction.followup.send(embed=embeds.error("Личное дело", reason), ephemeral=True)
+                return
+            primary, secondary = self.chosen.get("primary"), self.chosen.get("secondary")
+            if not primary or not secondary:
+                self._busy = False
+                await interaction.followup.send(
+                    embed=embeds.error("Личное дело", "Выберите основную и дополнительную роли."), ephemeral=True
+                )
+                return
+            if primary == secondary:
+                self._busy = False
+                await interaction.followup.send(
+                    embed=embeds.error("Личное дело", "Основная и дополнительная роли должны различаться."),
+                    ephemeral=True,
+                )
+                return
+            outcome, thread_id = await self.service.create_direct(guild, member, primary, secondary, member.id)
+        except Exception as error:
+            self._busy = False
+            await _send_failure(interaction, "Личное дело", error)
+            return
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        self.stop()
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            logger.debug("Не удалось отключить панель выбора ролей", exc_info=True)
+        await _send_direct_result(interaction, "Личное дело создано", outcome, thread_id)
+
+
+class SelfDossierPanelView(discord.ui.View):
+    """Публичная панель: участник клана сам создаёт себе личное дело."""
+
+    def __init__(self, service: DossierService) -> None:
+        super().__init__(timeout=None)
+        self.service = service
+
+    @discord.ui.button(
+        label="Создать своё личное дело",
+        style=discord.ButtonStyle.success,
+        custom_id=DOSSIER_SELF_ID,
+    )
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        guild, member = interaction.guild, interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message(
+                embed=embeds.error("Личное дело", "Кнопка работает только на сервере."), ephemeral=True
+            )
+            return
+        try:
+            reason = await self.service.self_create_block_reason(guild, member)
+        except Exception:
+            logger.exception("Не удалось проверить доступ к самостоятельному созданию дела")
+            reason = "Не удалось проверить доступ. Подробности в консоли бота."
+        if reason:
+            await interaction.response.send_message(embed=embeds.error("Личное дело", reason), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=embeds.info("Создание личного дела", "Выберите основную и дополнительную роль, затем нажмите «Создать»."),
+            view=SelfDossierView(self.service),
+            ephemeral=True,
+        )
+
+
 class DossierCog(ClanCog, name="Dossiers"):
     def __init__(self, bot: ClanBot, dossiers: DossierService) -> None:
         super().__init__(bot)
@@ -658,7 +797,82 @@ class DossierCog(ClanCog, name="Dossiers"):
 
     def views(self) -> list[discord.ui.View]:
         """Persistent views: обе кнопки живут в тикете и должны пережить перезапуск."""
-        return [AdmissionView(self.dossiers), ApprovalView(self.dossiers)]
+        return [AdmissionView(self.dossiers), ApprovalView(self.dossiers), SelfDossierPanelView(self.dossiers)]
+
+    @app_commands.command(
+        name="dossier_add",
+        description="Создать личное дело действующему участнику клана",
+    )
+    @app_commands.describe(
+        member="Участник клана",
+        primary="Основная роль",
+        secondary="Дополнительная роль",
+    )
+    @app_commands.choices(
+        primary=[app_commands.Choice(name=name, value=name) for name in SPECIALIZATIONS],
+        secondary=[app_commands.Choice(name=name, value=name) for name in SPECIALIZATIONS],
+    )
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def dossier_add(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        primary: app_commands.Choice[str],
+        secondary: app_commands.Choice[str],
+    ) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        if guild is None:
+            return
+        if member.bot:
+            await interaction.followup.send(
+                embed=embeds.error("Личное дело", "Личное дело нельзя создать для бота."), ephemeral=True
+            )
+            return
+        try:
+            outcome, thread_id = await self.dossiers.create_direct(
+                guild, member, primary.value, secondary.value, interaction.user.id
+            )
+        except Exception as error:
+            await _send_failure(interaction, "Личное дело", error)
+            return
+        await _send_direct_result(interaction, "Личное дело создано", outcome, thread_id)
+
+    @app_commands.command(
+        name="dossier_panel",
+        description="Опубликовать панель самостоятельного создания личных дел",
+    )
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def dossier_panel(self, interaction: discord.Interaction) -> None:
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                embed=embeds.error("Панель", "Команду нужно вызвать в текстовом канале."), ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        embed = discord.Embed(
+            title="Личные дела BEDA",
+            description=(
+                "Уже состоите в клане? Создайте своё личное дело: выберите основную и дополнительную роль, "
+                "остальное заполните через «Редактирование» на карточке."
+            ),
+            color=discord.Color(0xB89960),
+        )
+        try:
+            await channel.send(embed=embed, view=SelfDossierPanelView(self.dossiers))
+        except discord.HTTPException:
+            logger.exception("Не удалось опубликовать панель личных дел")
+            await interaction.followup.send(
+                embed=embeds.error("Панель", "Не удалось отправить сообщение. Проверьте права бота в канале."),
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(embed=embeds.success("Панель опубликована", channel.mention), ephemeral=True)
 
     @app_commands.command(
         name="dossier_card",

@@ -179,7 +179,12 @@ async def register_persistent_views(bot: ClanBot) -> None:
     """Регистрирует кнопки тикетов, опросов, розыгрышей, ивентов, личных дел и отпусков, которые переживают рестарт бота."""
     import json
 
-    from app.cogs.administration.dossiers import AdmissionView, ApprovalView, dossier_dynamic_items
+    from app.cogs.administration.dossiers import (
+        AdmissionView,
+        ApprovalView,
+        SelfDossierPanelView,
+        dossier_dynamic_items,
+    )
     from app.cogs.vacations.vacations import VacationPanelView
     from app.core.views import (
         EventSignupView,
@@ -198,6 +203,7 @@ async def register_persistent_views(bot: ClanBot) -> None:
     bot.add_view(WherePlayCallerView(), message_id=None)
     bot.add_view(AdmissionView(services.dossiers), message_id=None)
     bot.add_view(ApprovalView(services.dossiers), message_id=None)
+    bot.add_view(SelfDossierPanelView(services.dossiers), message_id=None)
     # Карточки личных дел: кнопки вкладок несут id владельца в custom_id.
     bot.add_dynamic_items(*dossier_dynamic_items())
     # Панель отпусков: кнопки работают после рестарта (фиксированные custom_id).

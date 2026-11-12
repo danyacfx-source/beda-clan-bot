@@ -67,6 +67,9 @@ GEAR: Final[dict[str, tuple[str, ...]]] = {
 
 STEAM_URL_PREFIX: Final = "https://steamcommunity.com/"
 EMBED_COLOR: Final = 0xB89960
+DIRECT_SOURCE: Final = "direct"
+DIRECT_ROLES_REASON: Final = "Личное дело BEDA для действующего участника"
+_DUPLICATE_ERRORS: Final = frozenset({"IntegrityError", "UniqueViolationError"})
 GEAR_NOTE: Final = "Отмечайте предмет, только если он уже разблокирован в игре."
 
 FIELDS: Final = (
@@ -183,16 +186,24 @@ def validate_steam_url(value: str) -> str:
     return text
 
 
-def validate_dossier(data: dict[str, Any], *, require_source: bool = True) -> dict[str, Any]:
+def validate_dossier(
+    data: dict[str, Any], *, require_source: bool = True, require_name: bool = True
+) -> dict[str, Any]:
     """Проверить и нормализовать анкету.
 
     ``require_source=False`` разрешает пустые город и Steam ID — такой режим
     нужен при предварительной проверке, когда их уточняет администратор.
+    ``require_name=False`` дополнительно разрешает пустое имя: так создаются
+    дела действующих участников (``source == "direct"``), которые заполняют
+    остальное позже через «Редактирование».
     """
     cleaned = dict(data)
+    optional = set() if require_source else {"city", "steam_id"}
+    if not require_name:
+        optional.add("name")
     for key, label, maximum in FIELDS:
         cleaned[key] = normalize_space(cleaned.get(key, ""))[: maximum + 1]
-        if not require_source and key in {"city", "steam_id"} and not cleaned[key]:
+        if key in optional and not cleaned[key]:
             continue
         if not 1 <= len(cleaned[key]) <= maximum:
             raise DossierValidationError(f"{label}: требуется от 1 до {maximum} символов.")
@@ -300,7 +311,10 @@ def gear_embed(data: dict[str, Any], owner: int) -> discord.Embed:
 
 def dossier_card(data: dict[str, Any], owner: int) -> tuple[discord.Embed, str]:
     """Собрать карточку личного дела для публикации. Возвращает embed и основную специализацию."""
-    validated = validate_dossier(dict(data))
+    if data.get("source") == DIRECT_SOURCE:
+        validated = validate_dossier(dict(data), require_source=False, require_name=False)
+    else:
+        validated = validate_dossier(dict(data))
     return profile_embed(validated, owner, None), validated["primary"]
 
 
@@ -534,7 +548,13 @@ class DossierService(BaseService["DossiersRepository"]):
         if image_path.stat().st_size > guild.filesize_limit:
             raise DossierValidationError("Изображение превышает лимит вложений сервера.")
 
-        await self._repo.reserve(guild.id, owner_id, json.dumps(data, ensure_ascii=False))
+        try:
+            await self._repo.reserve(guild.id, owner_id, json.dumps(data, ensure_ascii=False))
+        except Exception as error:
+            # sqlite3.IntegrityError (aiosqlite) и asyncpg UniqueViolationError: параллельный дубль по PK.
+            if type(error).__name__ in _DUPLICATE_ERRORS:
+                raise DossierValidationError("Личное дело уже создаётся или создано.") from error
+            raise
         attachment = discord.File(image_path, filename="specialization.png")
         try:
             thread = await forum.create_thread(
@@ -553,6 +573,94 @@ class DossierService(BaseService["DossiersRepository"]):
         thread_id = int(thread.thread.id)
         await self._repo.set_thread(guild.id, owner_id, thread_id)
         return thread_id
+
+    async def self_create_block_reason(
+        self, guild: discord.Guild, member: discord.Member, *, throttle: bool = True
+    ) -> str:
+        """Почему участник не может сам создать дело. Пустая строка — можно."""
+        mapping = await self.settings(guild.id)
+        if mapping is None:
+            return "Личные дела ещё не настроены."
+        beda_id = mapping.get("BEDA")
+        if not beda_id or not any(int(role.id) == int(beda_id) for role in member.roles):
+            return "Создать дело может только участник с ролью BEDA. Новичкам — через тикет."
+        existing = await self._repo.dossier(guild.id, member.id)
+        if existing is not None:
+            if existing["thread_id"] is None:
+                return "Ваше личное дело уже создаётся или создано."
+            return f"У вас уже есть личное дело: <#{existing['thread_id']}>"
+        if throttle:
+            wait = self._throttled(f"self:{guild.id}:{member.id}", limit=3, window=300.0)
+            if wait:
+                return f"Слишком много запросов. Повторите через {max(1, round(wait))} с."
+        return ""
+
+    async def create_direct(
+        self,
+        guild: discord.Guild,
+        member: discord.Member,
+        primary: str,
+        secondary: str,
+        actor_id: int,
+    ) -> tuple[str, int]:
+        """Создать дело действующему участнику без тикета и анкеты.
+
+        Возвращает ``(outcome, thread_id)``: ``"ready"`` либо ``"roles_pending"``.
+        """
+        if getattr(member, "bot", False):
+            raise DossierValidationError("Личное дело нельзя создать для бота.")
+        settings = await self._repo.settings(guild.id)
+        if settings is None:
+            raise DossierValidationError("Сначала выполните /setup_dossiers.")
+        roles_chosen: list[str] = []
+        for label, raw in (("Основная роль", primary), ("Дополнительная роль", secondary)):
+            role = normalize_specialization(raw)
+            if not role:
+                raise DossierValidationError(f"{label}: выберите одну из ролей — {', '.join(SPECIALIZATIONS)}.")
+            roles_chosen.append(role)
+        if roles_chosen[0] == roles_chosen[1]:
+            raise DossierValidationError("Основная и дополнительная роли должны различаться.")
+
+        existing = await self._repo.dossier(guild.id, member.id)
+        if existing is not None:
+            if existing["thread_id"] is None:
+                raise DossierValidationError("Личное дело уже создаётся или создано.")
+            raise DossierValidationError(f"Личное дело уже существует: <#{existing['thread_id']}>")
+
+        mapping = _normalize_role_mapping(json.loads(settings["roles"]))
+        resolved = dict(zip(("BEDA", *SPECIALIZATIONS), self.resolve_roles(guild, mapping), strict=True))
+        to_give = [resolved["BEDA"], *(resolved[name] for name in roles_chosen)]
+
+        nickname = clip(normalize_space(member.display_name), 60) or clip(normalize_space(member.name), 60) or "Без позывного"
+        data: dict[str, Any] = {
+            "nickname": nickname,
+            "name": "",
+            "city": "",
+            "steam_id": "",
+            "primary": roles_chosen[0],
+            "secondary": roles_chosen[1],
+            "gear": [],
+            "joined_at": "",
+            "season": "",
+            "steam_url": "",
+            "source": DIRECT_SOURCE,
+            "updated_by": int(actor_id),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        thread_id = await self._create_thread(guild, member.id, data, int(settings["forum_id"]))
+
+        try:
+            await member.add_roles(*to_give, reason=DIRECT_ROLES_REASON)
+        except discord.HTTPException:
+            logger.warning("Не удалось выдать роли guild=%s owner=%s thread=%s", guild.id, member.id, thread_id)
+            outcome = "roles_pending"
+        else:
+            await self._repo.set_status(guild.id, member.id, "ready")
+            outcome = "ready"
+        logger.info(
+            "dossier_direct guild=%s owner=%s actor=%s thread=%s", guild.id, member.id, actor_id, thread_id
+        )
+        return outcome, thread_id
 
     # --- интерактивная карточка ---
 
@@ -633,7 +741,8 @@ class DossierService(BaseService["DossiersRepository"]):
         """Обновить имя, ссылку на Steam-профиль и дату вступления."""
         data = await self._load(guild_id, owner_id)
         name = normalize_space(name)
-        if not 1 <= len(name) <= 60:
+        minimum = 0 if data.get("source") == DIRECT_SOURCE else 1
+        if not minimum <= len(name) <= 60:
             raise DossierValidationError("Имя: требуется от 1 до 60 символов.")
         data.update(name=name, steam_url=validate_steam_url(steam_url), joined_at=parse_joined_at(joined_at))
         return await self._save(guild_id, owner_id, actor_id, data)

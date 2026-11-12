@@ -456,3 +456,183 @@ async def test_card_view_активная_вкладка():
     styles = {child.item.label: child.item.style.name for child in view.children}
     assert styles == {"Профиль": "secondary", "Снаряжение": "primary", "Редактирование": "secondary"}
     assert view.timeout is None
+
+
+# --- дела действующих участников (create_direct / самообслуживание) ---
+
+class _FakeRole:
+    def __init__(self, role_id: int) -> None:
+        self.id = role_id
+        self.managed = False
+
+    def is_default(self) -> bool:
+        return False
+
+    def __ge__(self, other) -> bool:
+        return False
+
+
+class _FakeThread:
+    def __init__(self, thread_id: int) -> None:
+        self.thread = type("T", (), {"id": thread_id})()
+
+
+class _FakeForum:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+
+    async def create_thread(self, **kwargs):
+        self.created.append(kwargs)
+        return _FakeThread(900 + len(self.created))
+
+
+class _DirectGuild:
+    id = GUILD
+    filesize_limit = 25 * 1024 * 1024
+
+    def __init__(self) -> None:
+        self.roles = {role_id: _FakeRole(role_id) for role_id in ROLES.values()}
+        self.me = type(
+            "Me", (), {"guild_permissions": type("P", (), {"manage_roles": True})(), "top_role": object()}
+        )()
+
+    def get_role(self, role_id: int):
+        return self.roles.get(role_id)
+
+
+class _DirectMember:
+    def __init__(self, member_id: int = OWNER, role_ids=(), fail_roles: bool = False) -> None:
+        self.id = member_id
+        self.bot = False
+        self.display_name = "Бэд"
+        self.name = "bad"
+        self.roles = [_FakeRole(role_id) for role_id in role_ids]
+        self.fail_roles = fail_roles
+        self.added: list[int] = []
+
+    async def add_roles(self, *roles, reason=None):
+        if self.fail_roles:
+            import discord
+
+            raise discord.HTTPException(type("R", (), {"status": 500, "reason": "x"})(), "boom")
+        self.added = [role.id for role in roles]
+
+
+@pytest.fixture
+async def direct(repo, service, monkeypatch):
+    await repo.save_settings(GUILD, 500, json.dumps(ROLES))
+    forum = _FakeForum()
+
+    async def fake_forum(_guild, _forum_id):
+        return forum
+
+    monkeypatch.setattr(service, "_forum", fake_forum)
+    return service, forum, _DirectGuild()
+
+
+async def test_create_direct_создаёт_дело_и_выдаёт_роли(repo, direct):
+    service, forum, guild = direct
+    member = _DirectMember()
+    outcome, thread_id = await service.create_direct(guild, member, "Медик", " пилот ", 5)
+    assert outcome == "ready" and thread_id == 901 and len(forum.created) == 1
+    row = await repo.dossier(GUILD, OWNER)
+    assert row["status"] == "ready" and int(row["thread_id"]) == 901
+    data = json.loads(row["data"])
+    assert data["source"] == "direct" and data["primary"] == "Медик" and data["secondary"] == "Пилот"
+    assert data["updated_by"] == 5 and data["name"] == ""
+    assert member.added == [ROLES["BEDA"], ROLES["Медик"], ROLES["Пилот"]]
+
+
+async def test_create_direct_дубликат_и_одинаковые_роли(direct):
+    service, forum, guild = direct
+    with pytest.raises(DossierValidationError, match="различаться"):
+        await service.create_direct(guild, _DirectMember(), "Медик", "медик", 5)
+    with pytest.raises(DossierValidationError, match="Основная роль"):
+        await service.create_direct(guild, _DirectMember(), "Маг", "Медик", 5)
+    await service.create_direct(guild, _DirectMember(), "Медик", "Пилот", 5)
+    with pytest.raises(DossierValidationError, match="<#901>"):
+        await service.create_direct(guild, _DirectMember(), "Медик", "Пилот", 5)
+    assert len(forum.created) == 1
+
+
+async def test_create_direct_требует_настройки(service):
+    with pytest.raises(DossierValidationError, match="setup_dossiers"):
+        await service.create_direct(_DirectGuild(), _DirectMember(), "Медик", "Пилот", 5)
+
+
+async def test_create_direct_роли_не_выданы(repo, direct):
+    service, _, guild = direct
+    outcome, _ = await service.create_direct(guild, _DirectMember(fail_roles=True), "Медик", "Пилот", 5)
+    assert outcome == "roles_pending"
+    assert (await repo.dossier(GUILD, OWNER))["status"] == "roles_pending"
+
+
+async def test_create_direct_гонка_по_pk(repo, direct, monkeypatch):
+    service, _, guild = direct
+    real = repo.dossier
+    calls = 0
+
+    async def blind(guild_id, owner_id):
+        nonlocal calls
+        calls += 1
+        return None if calls == 1 else await real(guild_id, owner_id)
+
+    await repo.reserve(GUILD, OWNER, "{}")
+    monkeypatch.setattr(repo, "dossier", blind)
+    with pytest.raises(DossierValidationError, match="уже создаётся"):
+        await service.create_direct(guild, _DirectMember(), "Медик", "Пилот", 5)
+
+
+async def test_прямое_дело_с_пустым_именем_рендерится_и_редактируется(repo, direct):
+    service, _, guild = direct
+    await service.create_direct(guild, _DirectMember(), "Штурмовик", "Медик", 5)
+    data = await service.card(GUILD, OWNER)
+    fields = {field.name: field.value for field in profile_embed(data, OWNER).fields}
+    assert fields["Имя"] == "Не заполнено" and fields["Город"] == "Не заполнено"
+    assert fields["Steam"] == "Не заполнено"
+    gear_embed(data, OWNER)
+
+    data = await service.update_identity(GUILD, OWNER, 7, name="", steam_url="", joined_at="05.03.2025")
+    assert data["joined_at"] == "2025-03-05"
+    data = await service.update_identity(GUILD, OWNER, 7, name="Иван", steam_url="", joined_at="")
+    assert data["name"] == "Иван"
+    await service.update_profile(GUILD, OWNER, 7, nickname="Новый", season="2", primary="Медик", secondary="Пилот")
+    await service.update_gear(GUILD, OWNER, 7, ["Дефибриллятор"])
+    assert (await service.card(GUILD, OWNER))["gear"] == ["Дефибриллятор"]
+
+
+async def test_update_identity_для_обычного_дела_требует_имя(repo, service):
+    await _ready(repo)
+    with pytest.raises(DossierValidationError, match="Имя"):
+        await service.update_identity(GUILD, OWNER, 5, name="", steam_url="", joined_at="")
+
+
+async def test_self_create_block_reason(repo, direct):
+    service, _, guild = direct
+    fresh = DossierService(repo)
+    assert "не настроены" in await fresh.self_create_block_reason(
+        type("G", (), {"id": 999})(), _DirectMember()
+    )
+    assert "BEDA" in await service.self_create_block_reason(guild, _DirectMember())
+    member = _DirectMember(role_ids=[ROLES["BEDA"]])
+    assert await service.self_create_block_reason(guild, member) == ""
+    await service.create_direct(guild, member, "Медик", "Пилот", 5)
+    reason = await service.self_create_block_reason(guild, member)
+    assert "уже есть личное дело" in reason and "<#901>" in reason
+
+
+async def test_self_create_block_reason_троттлинг(direct):
+    service, _, guild = direct
+    member = _DirectMember(role_ids=[ROLES["BEDA"]])
+    for _ in range(3):
+        assert await service.self_create_block_reason(guild, member) == ""
+    assert "Слишком много" in await service.self_create_block_reason(guild, member)
+    assert await service.self_create_block_reason(guild, member, throttle=False) == ""
+
+
+async def test_панель_самообслуживания_persistent():
+    from app.cogs.administration.dossiers import SelfDossierPanelView
+
+    view = SelfDossierPanelView(DossierService(_Repo()))
+    assert view.timeout is None and view.is_persistent()
+    assert view.children[0].custom_id == "beda:dossier:self:v1"
