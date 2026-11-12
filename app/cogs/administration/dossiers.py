@@ -398,11 +398,6 @@ class EditMenuView(discord.ui.View):
         data = await self._guard(interaction)
         if data is None:
             return
-        if not available_gear(data):
-            await interaction.response.send_message(
-                embed=embeds.info("Снаряжение", "Для ваших ролей нет снаряжения для отметки."), ephemeral=True
-            )
-            return
         await interaction.response.send_message(
             embed=embeds.info("Выберите фактически открытые предметы", GEAR_NOTE),
             view=GearSelectView(self.service, self.owner_id, data),
@@ -426,7 +421,7 @@ class GearSelectView(discord.ui.View):
         self.owner_id = owner_id
         owned = set(data.get("gear") or [])
         role_of = {item: role for role, items in GEAR.items() for item in items}
-        items = available_gear(data)
+        items = available_gear()
         self.selected = [item for item in items if item in owned]
         select = GearSelect(
             placeholder="Открытое снаряжение",
