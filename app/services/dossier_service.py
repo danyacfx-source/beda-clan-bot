@@ -15,10 +15,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -36,6 +38,7 @@ __all__ = [
     "DossierPermissionError",
     "DossierValidationError",
     "DossierService",
+    "ResetReport",
     "available_gear",
     "dossier_card",
     "gear_embed",
@@ -329,12 +332,28 @@ def review_card(data: dict[str, Any], owner: int) -> discord.Embed:
     return embed
 
 
+@dataclass
+class ResetReport:
+    """Итог сброса личных дел нового сезона. Карточки обновляет слой UI."""
+
+    dossiers_reset: int = 0
+    dossiers_failed: int = 0
+    members_incomplete: bool = False  # не удалось загрузить всех участников: часть ролей могла остаться
+    roles_missing: bool = False  # ни одна роль специализации не найдена на сервере
+    roles_removed_members: int = 0
+    roles_failed_members: int = 0
+    cards_refreshed: int = 0
+    cards_failed: int = 0
+    card_owners: list[int] = field(default_factory=list)  # владельцы дел с тредом, карточки которых нужно перерисовать
+
+
 class DossierService(BaseService["DossiersRepository"]):
     """Бизнес-логика личных дел поверх репозитория."""
 
     def __init__(self, repo: DossiersRepository) -> None:
         super().__init__(repo)
         self._windows: dict[str, deque[float]] = defaultdict(deque)
+        self._reset_locks: dict[int, asyncio.Lock] = {}
 
     async def aclose(self) -> None:
         self._windows.clear()
@@ -754,6 +773,118 @@ class DossierService(BaseService["DossiersRepository"]):
         data = await self._load(guild_id, owner_id)
         data["gear"] = validate_gear(data, list(selected))
         return await self._save(guild_id, owner_id, actor_id, data)
+
+    async def dossier_count(self, guild_id: int) -> int:
+        """Сколько дел записано в гильдии (для предупреждения перед сбросом)."""
+        return len(await self._repo.dossiers_for_guild(guild_id))
+
+    async def _specialization_roles(self, guild: discord.Guild) -> dict[str, discord.Role]:
+        """Настроенные роли специализаций; пропавшие на сервере роли пропускаются."""
+        mapping = await self.settings(guild.id)
+        if mapping is None:
+            raise DossierValidationError("Сначала выполните /setup_dossiers.")
+        roles: dict[str, discord.Role] = {}
+        for name in SPECIALIZATIONS:
+            role_id = mapping.get(name)
+            role = guild.get_role(int(role_id)) if role_id else None
+            if role is not None:
+                roles[name] = role
+        return roles
+
+    async def sync_specialization_roles(
+        self, guild: discord.Guild, member: discord.Member, data: dict[str, Any]
+    ) -> bool:
+        """Привести роли специализаций участника в соответствие с делом (BEDA не трогается).
+
+        Возвращает ``False``, если роли не настроены или Discord отказал; исключений не бросает.
+        """
+        try:
+            known = await self._specialization_roles(guild)
+        except DossierValidationError:
+            return False
+        except Exception:
+            logger.exception("Не удалось прочитать настройки ролей guild=%s", guild.id)
+            return False
+        needed = _member_roles(data)
+        complete = all(name in known for name in needed)
+        wanted = {known[name].id for name in needed if name in known}
+        current = {role.id for role in member.roles}
+        to_add = [role for role in known.values() if role.id in wanted and role.id not in current]
+        to_remove = [role for role in known.values() if role.id not in wanted and role.id in current]
+        try:
+            if to_add:
+                await member.add_roles(*to_add, reason="Обновление личного дела BEDA")
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Обновление личного дела BEDA")
+        except discord.HTTPException:
+            logger.warning("Не удалось синхронизировать роли guild=%s owner=%s", guild.id, member.id)
+            return False
+        return complete
+
+    async def reset_all(self, guild: discord.Guild, actor_id: int) -> ResetReport:
+        """Сброс нового сезона: снаряжение всех дел и роли специализаций у участников.
+
+        Ничего не удаляется: треды, профили и роль BEDA остаются. Карточки в тредах
+        перерисовывает вызывающий код (``report.card_owners``).
+        """
+        lock = self._reset_locks.setdefault(guild.id, asyncio.Lock())
+        if lock.locked():
+            raise DossierValidationError("Сброс уже выполняется.")
+        async with lock:
+            roles = await self._specialization_roles(guild)  # проверяет и наличие настроек
+            report = ResetReport()
+            now = datetime.now(UTC).isoformat()
+            for row in await self._repo.dossiers_for_guild(guild.id):
+                owner_id = int(row["owner_id"])
+                try:
+                    data = json.loads(row["data"])
+                except (json.JSONDecodeError, TypeError):
+                    data = None
+                if not isinstance(data, dict):
+                    logger.warning("Пропущено повреждённое дело при сбросе guild=%s owner=%s", guild.id, owner_id)
+                    continue
+                data.update(gear=[], updated_by=int(actor_id), updated_at=now)
+                try:
+                    await self._repo.update_data(guild.id, owner_id, json.dumps(data, ensure_ascii=False))
+                except Exception:
+                    report.dossiers_failed += 1
+                    logger.exception("Не удалось сбросить дело guild=%s owner=%s", guild.id, owner_id)
+                    continue
+                report.dossiers_reset += 1
+                if row["thread_id"] is not None and row["status"] in ("ready", "roles_pending"):
+                    report.card_owners.append(owner_id)
+
+            role_list = list(roles.values())
+            role_ids = {role.id for role in role_list}
+            report.roles_missing = not role_ids
+            if role_ids:
+                if not guild.chunked:
+                    try:
+                        await guild.chunk()
+                    except Exception:
+                        report.members_incomplete = True
+                        logger.warning("Не удалось загрузить участников guild=%s", guild.id, exc_info=True)
+                for member in list(guild.members):
+                    held = [role for role in member.roles if role.id in role_ids]
+                    if not held:
+                        continue
+                    try:
+                        await member.remove_roles(*held, reason="Сброс личных дел")
+                    except discord.HTTPException:
+                        report.roles_failed_members += 1
+                        logger.warning("Не удалось снять роли guild=%s member=%s", guild.id, member.id)
+                    else:
+                        report.roles_removed_members += 1
+            logger.info(
+                "dossier_reset guild=%s actor=%s dossiers=%s dossiers_failed=%s roles_removed=%s roles_failed=%s",
+                guild.id,
+                actor_id,
+                report.dossiers_reset,
+                report.dossiers_failed,
+                report.roles_removed_members,
+                report.roles_failed_members,
+            )
+            return report
 
     async def _forum(self, guild: discord.Guild, forum_id: int) -> discord.ForumChannel:
         try:

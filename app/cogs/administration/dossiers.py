@@ -200,6 +200,7 @@ async def _apply_update(
     *,
     tab: str,
     title: str,
+    sync_roles: bool = False,
 ) -> None:
     """Общий конвейер сохранения: права → сервис → обновление карточки → ответ."""
     await interaction.response.defer(ephemeral=True)
@@ -227,7 +228,24 @@ async def _apply_update(
         await refresh_card(guild, service, owner_id, data, tab=tab, reattach=changed_role)
     except Exception:
         logger.warning("Не удалось обновить карточку личного дела owner=%s", owner_id, exc_info=True)
-    await interaction.followup.send(embed=embeds.success(title, "Изменения сохранены."), ephemeral=True)
+    text = "Изменения сохранены."
+    if sync_roles and not await _sync_owner_roles(guild, service, owner_id, data):
+        text += "\nРоли не обновлены — обратитесь к администратору."
+    await interaction.followup.send(embed=embeds.success(title, text), ephemeral=True)
+
+
+async def _sync_owner_roles(
+    guild: discord.Guild, service: DossierService, owner_id: int, data: dict[str, Any]
+) -> bool:
+    """Роли специализаций выдаются владельцу дела (не редактору). Ушедший с сервера — не ошибка."""
+    try:
+        member = guild.get_member(owner_id) or await guild.fetch_member(owner_id)
+    except discord.NotFound:
+        return True
+    except discord.HTTPException:
+        logger.warning("Не удалось получить владельца дела owner=%s", owner_id, exc_info=True)
+        return False
+    return await service.sync_specialization_roles(guild, member, data)
 
 
 class ProfileModal(discord.ui.Modal, title="Редактировать профиль"):
@@ -277,6 +295,7 @@ class ProfileModal(discord.ui.Modal, title="Редактировать проф�
             ),
             tab="profile",
             title="Профиль",
+            sync_roles=True,
         )
 
 
@@ -787,6 +806,79 @@ class SelfDossierPanelView(discord.ui.View):
         )
 
 
+RESET_ROLES_NOTE = (
+    "Роли специализаций сняты. Чтобы вернуть их, участнику нужно открыть "
+    "«Редактирование → Изменить профиль» на своей карточке и сохранить (можно без изменений)."
+)
+
+
+class ResetConfirmView(discord.ui.View):
+    """Подтверждение сброса личных дел: нажать может только вызвавший администратор."""
+
+    def __init__(self, cog: DossierCog, invoker_id: int, interaction: discord.Interaction | None = None) -> None:
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.invoker_id = invoker_id
+        self.interaction = interaction
+        self._claimed = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        allowed = (
+            int(user.id) == self.invoker_id
+            and isinstance(user, discord.Member)
+            and user.guild_permissions.administrator
+        )
+        if not allowed:
+            await interaction.response.send_message(
+                embed=embeds.error("Сброс личных дел", "Подтвердить может только вызвавший команду администратор."),
+                ephemeral=True,
+            )
+        return allowed
+
+    def _claim(self) -> bool:
+        """Синхронно занять действие: повторное нажатие получает False."""
+        if self._claimed:
+            return False
+        self._claimed = True
+        self.stop()
+        return True
+
+    async def _disable(self, interaction: discord.Interaction) -> None:
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            logger.debug("Не удалось отключить панель сброса", exc_info=True)
+
+    async def on_timeout(self) -> None:
+        if self._claimed or self.interaction is None:
+            return
+        await self._disable(self.interaction)
+
+    @discord.ui.button(label="Сбросить", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        claimed = self._claim()
+        await interaction.response.defer(ephemeral=True)
+        if not claimed:
+            return
+        await self._disable(interaction)
+        guild = interaction.guild
+        if guild is None:
+            return
+        await self.cog.run_reset(interaction, guild)
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        claimed = self._claim()
+        await interaction.response.defer(ephemeral=True)
+        if not claimed:
+            return
+        await self._disable(interaction)
+        await interaction.followup.send(embed=embeds.info("Сброс личных дел", "Отменено."), ephemeral=True)
+
+
 class DossierCog(ClanCog, name="Dossiers"):
     def __init__(self, bot: ClanBot, dossiers: DossierService) -> None:
         super().__init__(bot)
@@ -839,6 +931,86 @@ class DossierCog(ClanCog, name="Dossiers"):
             await _send_failure(interaction, "Личное дело", error)
             return
         await _send_direct_result(interaction, "Личное дело создано", outcome, thread_id)
+
+    @app_commands.command(
+        name="dossier_reset",
+        description="Сбросить личные дела для нового сезона (снаряжение и роли специализаций)",
+    )
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def dossier_reset(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        if guild is None:
+            return
+        try:
+            count = await self.dossiers.dossier_count(guild.id)
+        except Exception:
+            logger.exception("Не удалось посчитать личные дела")
+            await interaction.followup.send(
+                embed=embeds.error("Сброс личных дел", "Не удалось прочитать дела. Подробности в консоли бота."),
+                ephemeral=True,
+            )
+            return
+        embed = embeds.warning(
+            "Сброс личных дел",
+            f"Будет снято снаряжение у всех дел ({count}) и роли специализаций у всех участников сервера.\n"
+            "Треды, профили, специализации в карточках и роль BEDA останутся.\n"
+            + RESET_ROLES_NOTE
+            + "\n**Действие необратимо.**",
+        )
+        view = ResetConfirmView(self, int(interaction.user.id), interaction)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    async def run_reset(self, interaction: discord.Interaction, guild: discord.Guild) -> None:
+        """Выполнить сброс и перерисовать карточки; итог отправляется follow-up'ом."""
+        try:
+            report = await self.dossiers.reset_all(guild, int(interaction.user.id))
+        except (DossierValidationError, DossierPermissionError) as error:
+            await self._safe_send(interaction, embeds.error("Сброс личных дел", _error_text(error)))
+            return
+        except Exception:
+            logger.exception("Не удалось выполнить сброс личных дел")
+            await self._safe_send(
+                interaction,
+                embeds.error(
+                    "Сброс личных дел",
+                    "Сброс прерван, часть дел могла быть сброшена — повторите команду, это безопасно.",
+                ),
+            )
+            return
+        for owner_id in report.card_owners:
+            try:
+                data = await self.dossiers.card(guild.id, owner_id)
+                await refresh_card(guild, self.dossiers, owner_id, data, tab="profile", reattach=False)
+                report.cards_refreshed += 1
+            except Exception:
+                report.cards_failed += 1
+                logger.warning("Не удалось обновить карточку после сброса owner=%s", owner_id, exc_info=True)
+        lines = [
+            f"Дел сброшено: {report.dossiers_reset}",
+            f"Дел не удалось сбросить: {report.dossiers_failed}",
+            f"Роли сняты у участников: {report.roles_removed_members}",
+            f"Не удалось снять роли у участников: {report.roles_failed_members}",
+            f"Карточек обновлено: {report.cards_refreshed}",
+            f"Карточек не обновлено: {report.cards_failed}",
+        ]
+        if report.roles_missing:
+            lines.append("Роли специализаций не найдены на сервере — проверьте /setup_dossiers")
+        if report.members_incomplete:
+            lines.append("Не удалось загрузить всех участников: часть ролей могла остаться — повторите команду.")
+        lines.append(RESET_ROLES_NOTE)
+        problems = report.dossiers_failed or report.roles_failed_members or report.roles_missing
+        build = embeds.error if problems and not report.dossiers_reset else embeds.success
+        await self._safe_send(interaction, build("Сброс завершён", "\n".join(lines)))
+
+    @staticmethod
+    async def _safe_send(interaction: discord.Interaction, embed: discord.Embed) -> None:
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            logger.warning("Не удалось отправить итог сброса личных дел", exc_info=True)
 
     @app_commands.command(
         name="dossier_panel",

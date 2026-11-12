@@ -636,3 +636,207 @@ async def test_панель_самообслуживания_persistent():
     view = SelfDossierPanelView(DossierService(_Repo()))
     assert view.timeout is None and view.is_persistent()
     assert view.children[0].custom_id == "beda:dossier:self:v1"
+
+
+# --- сброс сезона и синхронизация ролей ---
+
+def _http_error():
+    import discord
+
+    return discord.HTTPException(type("R", (), {"status": 500, "reason": "x"})(), "boom")
+
+
+class _ResetMember:
+    def __init__(self, member_id: int, role_ids=(), fail: bool = False) -> None:
+        self.id = member_id
+        self.roles = [_FakeRole(role_id) for role_id in role_ids]
+        self.fail = fail
+        self.removed: list[int] = []
+        self.added: list[int] = []
+
+    async def remove_roles(self, *roles, reason=None):
+        if self.fail:
+            raise _http_error()
+        self.removed = [role.id for role in roles]
+
+    async def add_roles(self, *roles, reason=None):
+        if self.fail:
+            raise _http_error()
+        self.added = [role.id for role in roles]
+
+
+class _ResetGuild(_DirectGuild):
+    chunked = True
+
+    def __init__(self, members) -> None:
+        super().__init__()
+        self.members = members
+
+
+async def _reset_setup(repo, members):
+    await repo.save_settings(GUILD, 500, json.dumps(ROLES))
+    return _ResetGuild(members)
+
+
+async def test_reset_all_очищает_снаряжение_и_сохраняет_остальное(repo, service):
+    await repo.save_settings(GUILD, 500, json.dumps(ROLES))
+    data = {**_valid(), "gear": ["FAL", "M4"], "season": "5"}
+    await _ready(repo, data)
+    await repo.reserve(GUILD, 101, "{не json")
+    await repo.set_thread(GUILD, 101, 778)
+    report = await service.reset_all(_ResetGuild([]), 42)
+    assert report.dossiers_reset == 1
+    assert report.card_owners == [OWNER]
+    row = await repo.dossier(GUILD, OWNER)
+    saved = json.loads(row["data"])
+    assert saved["gear"] == [] and saved["season"] == "5" and saved["primary"] == "Штурмовик"
+    assert saved["updated_by"] == 42 and saved["updated_at"]
+    assert row["status"] == "ready" and row["thread_id"] == 777
+    assert (await repo.dossier(GUILD, 101))["data"] == "{не json"
+
+
+async def test_reset_all_снимает_только_роли_специализаций(repo, service):
+    beda, assault, medic = ROLES["BEDA"], ROLES["Штурмовик"], ROLES["Медик"]
+    with_roles = _ResetMember(1, [beda, assault, medic, 999])
+    only_beda = _ResetMember(2, [beda])
+    guild = await _reset_setup(repo, [with_roles, only_beda])
+    report = await service.reset_all(guild, 42)
+    assert sorted(with_roles.removed) == sorted([assault, medic])
+    assert only_beda.removed == []
+    assert report.roles_removed_members == 1 and report.roles_failed_members == 0
+
+
+async def test_reset_all_считает_сбои_ролей(repo, service):
+    bad = _ResetMember(1, [ROLES["Медик"]], fail=True)
+    good = _ResetMember(2, [ROLES["Пилот"]])
+    guild = await _reset_setup(repo, [bad, good])
+    report = await service.reset_all(guild, 42)
+    assert report.roles_failed_members == 1 and report.roles_removed_members == 1
+    assert good.removed == [ROLES["Пилот"]]
+
+
+async def test_reset_all_чанкует_участников(repo, service):
+    guild = await _reset_setup(repo, [])
+    guild.chunked = False
+    called = []
+
+    async def chunk():
+        called.append(True)
+
+    guild.chunk = chunk
+    await service.reset_all(guild, 42)
+    assert called
+
+
+async def test_reset_all_требует_настройки(service):
+    with pytest.raises(DossierValidationError, match="setup_dossiers"):
+        await service.reset_all(_ResetGuild([]), 42)
+
+
+async def test_reset_all_параллельный_запуск_запрещён(repo, service):
+    import asyncio
+
+    guild = await _reset_setup(repo, [])
+    async with service._reset_locks.setdefault(GUILD, asyncio.Lock()):
+        with pytest.raises(DossierValidationError, match="уже выполняется"):
+            await service.reset_all(guild, 42)
+    await service.reset_all(guild, 42)  # после освобождения работает
+
+
+async def test_sync_specialization_roles_выдаёт_и_снимает(repo, service):
+    guild = await _reset_setup(repo, [])
+    member = _ResetMember(OWNER, [ROLES["BEDA"], ROLES["Штурмовик"], ROLES["Снайпер"], 999])
+    data = {**_valid(), "primary": "Штурмовик", "secondary": "Пилот"}
+    assert await service.sync_specialization_roles(guild, member, data) is True
+    assert member.added == [ROLES["Пилот"]]
+    assert member.removed == [ROLES["Снайпер"]]  # BEDA и чужая роль не тронуты
+
+
+async def test_sync_specialization_roles_ничего_не_делает_если_синхронно(repo, service):
+    guild = await _reset_setup(repo, [])
+    member = _ResetMember(OWNER, [ROLES["Штурмовик"], ROLES["Медик"]])
+    assert await service.sync_specialization_roles(guild, member, _valid()) is True
+    assert member.added == [] and member.removed == []
+
+
+async def test_sync_specialization_roles_false_при_ошибке_discord(repo, service):
+    guild = await _reset_setup(repo, [])
+    member = _ResetMember(OWNER, [], fail=True)
+    assert await service.sync_specialization_roles(guild, member, _valid()) is False
+
+
+async def test_sync_specialization_roles_false_без_настроек(service):
+    assert await service.sync_specialization_roles(_ResetGuild([]), _ResetMember(OWNER), _valid()) is False
+
+
+async def test_sync_specialization_roles_false_если_роль_отсутствует_на_сервере(repo, service):
+    guild = await _reset_setup(repo, [])
+    del guild.roles[ROLES["Пилот"]]
+    member = _ResetMember(OWNER, [ROLES["Снайпер"]])
+    data = {**_valid(), "primary": "Штурмовик", "secondary": "Пилот"}
+    assert await service.sync_specialization_roles(guild, member, data) is False
+    assert member.added == [ROLES["Штурмовик"]]  # остальное синхронизировано
+    assert member.removed == [ROLES["Снайпер"]]
+
+
+async def test_sync_specialization_roles_ловит_ошибку_настроек(repo, service, monkeypatch):
+    async def boom(_guild_id):
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(service, "settings", boom)
+    assert await service.sync_specialization_roles(_ResetGuild([]), _ResetMember(OWNER), _valid()) is False
+
+
+async def test_reset_all_сбой_записи_и_chunk_не_прерывают(repo, service, monkeypatch):
+    await repo.save_settings(GUILD, 500, json.dumps(ROLES))
+    await _ready(repo)
+    original = repo.update_data
+
+    async def failing(*args, **kwargs):
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(repo, "update_data", failing)
+    guild = _ResetGuild([_ResetMember(1, [ROLES["Медик"]])])
+    guild.chunked = False
+
+    async def chunk():
+        raise _http_error()
+
+    guild.chunk = chunk
+    report = await service.reset_all(guild, 42)
+    monkeypatch.setattr(repo, "update_data", original)
+    assert report.dossiers_failed == 1 and report.dossiers_reset == 0
+    assert report.members_incomplete and report.roles_removed_members == 1
+
+
+async def test_reset_all_предупреждает_если_ролей_нет(repo, service):
+    guild = await _reset_setup(repo, [])
+    guild.roles.clear()
+    assert (await service.reset_all(guild, 42)).roles_missing is True
+
+
+async def test_двойное_нажатие_подтверждения_сбрасывает_один_раз():
+    from app.cogs.administration.dossiers import ResetConfirmView
+
+    runs = []
+
+    class Cog:
+        async def run_reset(self, interaction, guild):
+            runs.append(guild)
+
+    class Resp:
+        async def defer(self, **kwargs):
+            pass
+
+    class Inter:
+        guild = object()
+        response = Resp()
+
+        async def edit_original_response(self, **kwargs):
+            pass
+
+    view = ResetConfirmView(Cog(), 1)
+    await view.confirm.callback(Inter())
+    await view.confirm.callback(Inter())
+    await view.cancel.callback(Inter())
+    assert len(runs) == 1

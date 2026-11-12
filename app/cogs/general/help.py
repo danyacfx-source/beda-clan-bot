@@ -88,6 +88,7 @@ _CATEGORIES = (
                 "approve_interview",
                 "dossier_card",
                 "dossier_add",
+                "dossier_reset",
                 "dossier_panel",
                 "setup",
                 "setup_vacations",
