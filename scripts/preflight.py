@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -43,6 +46,62 @@ def _check_modules() -> list[str]:
         except Exception as exc:
             errors.append(f"{package}: {exc.__class__.__name__}")
     return errors
+
+
+_PASSWORD_RE = re.compile(r"(://[^:/@\s?#]*):[^\s?#]*@")
+_QUERY_PASSWORD_RE = re.compile(r"([?&](?:password|sslpassword|passfile)=)[^&\s#]*", re.IGNORECASE)
+
+
+def mask_url(url: str) -> str:
+    """Скрывает пароль в URL подключения: postgresql://user:***@host/db."""
+    return _QUERY_PASSWORD_RE.sub(r"\1***", _PASSWORD_RE.sub(r"\1:***@", url))
+
+
+def database_name(url: str) -> str:
+    """Имя БД из URL подключения (без параметров запроса)."""
+    try:
+        return urlsplit(url).path.lstrip("/")
+    except ValueError:
+        return ""
+
+
+async def _probe_postgres(url: str) -> tuple[str, int]:
+    import asyncpg  # type: ignore[import-untyped]
+
+    connection = await asyncpg.connect(url, timeout=10)
+    try:
+        version = str(await connection.fetchval("SHOW server_version"))
+        tables = int(
+            await connection.fetchval("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")
+        )
+    finally:
+        await connection.close()
+    return version, tables
+
+
+def _check_postgres(url: str, errors: list[str], warnings: list[str], strict: bool) -> None:
+    masked = mask_url(url)
+    try:
+        import asyncpg  # noqa: F401
+    except ImportError:
+        errors.append("asyncpg не установлен")
+        print("[FAIL] asyncpg не установлен (pip install -r requirements.txt)")
+        return
+    if database_name(url) == "postgres":
+        warnings.append("DATABASE_URL указывает на общую БД postgres")
+        print("[WARN] DATABASE_URL указывает на общую БД 'postgres' — создайте отдельную (scripts/pg_create_db.sh)")
+    try:
+        version, tables = asyncio.run(asyncio.wait_for(_probe_postgres(url), timeout=15))
+    except Exception as exc:
+        message = mask_url(f"{exc.__class__.__name__}: {exc}")
+        if strict:
+            errors.append(f"PostgreSQL недоступен: {message}")
+            print(f"[FAIL] PostgreSQL {masked}: {message}")
+        else:
+            warnings.append(f"PostgreSQL недоступен: {message}")
+            print(f"[WARN] PostgreSQL {masked}: {message}")
+        return
+    print(f"[OK] PostgreSQL {version}, {masked}, таблиц в public: {tables}")
 
 
 def _check_writable(path: Path) -> str | None:
@@ -86,6 +145,10 @@ def main() -> int:
     else:
         warnings.append("BOT_TOKEN пока не задан — это нормально до заполнения .env")
         print("[WARN] BOT_TOKEN не задан")
+
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        _check_postgres(database_url, errors, warnings, args.strict)
 
     db_path = Path(os.getenv("DB_PATH", str(ROOT / "data" / "bot.db")))
     backup_dir = Path(os.getenv("DB_BACKUP_DIR", str(ROOT / "data" / "backups")))

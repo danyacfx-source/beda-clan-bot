@@ -60,7 +60,7 @@ python main.py
 
 ```bash
 pip install -r requirements-dev.txt
-  pytest -q          # 155 тестов
+  pytest -q          # 587 тестов
 ruff check app main.py scripts tests
 ```
 
@@ -68,7 +68,9 @@ ruff check app main.py scripts tests
 
 - systemd: `systemd/beda-clan-bot.service`, установка — `scripts/install_ubuntu.sh`
 - Docker: `docker compose up -d`
+- Без systemd (SSH-консоль): `scripts/run.sh --background`, остановка — `scripts/stop.sh`
 - Миграция на PostgreSQL: `python scripts/migrate_sqlite_to_postgres.py`
+- Переезд на новый VPS с общим PostgreSQL и загрузкой дампа: [MIGRATION.md](MIGRATION.md)
 
 Подробности — в [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 

@@ -12,6 +12,8 @@ dist/
 build/
 .idea/
 .vscode/
+# SQL-дампы в корне (содержат данные сервера)
+/*.sql
 # Archives
 *.zip
 *.rar
