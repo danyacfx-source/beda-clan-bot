@@ -16,7 +16,10 @@ services:
     expose:
       - "8000"
     networks:
+      # internal — связь с PostgreSQL и панелью без выхода наружу;
+      # egress — выход в интернет: без него бот не достучится до Discord.
       - internal
+      - egress
 
   # Опционально: включается только при миграции на PostgreSQL:
   # docker compose --profile postgres up -d postgres
@@ -43,6 +46,7 @@ services:
 networks:
   internal:
     internal: true
+  egress: {}
 
 volumes:
   postgres_data:
