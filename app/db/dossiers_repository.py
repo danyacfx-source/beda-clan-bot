@@ -137,11 +137,13 @@ class DossiersRepository(BaseRepository):
             (guild_id, owner_id),
         )
 
-    async def set_thread(self, guild_id: int, owner_id: int, thread_id: int) -> None:
-        await self.db.execute(
+    async def set_thread(self, guild_id: int, owner_id: int, thread_id: int) -> bool:
+        """Привязать тред к зарезервированной записи; False — записи уже нет (её удалили)."""
+        cursor = await self.db.execute(
             "UPDATE dossiers SET thread_id = ?, status = 'roles_pending' WHERE guild_id = ? AND owner_id = ?",
             (thread_id, guild_id, owner_id),
         )
+        return cursor.rowcount > 0
 
     async def set_status(self, guild_id: int, owner_id: int, status: str) -> None:
         await self.db.execute(
@@ -161,3 +163,14 @@ class DossiersRepository(BaseRepository):
             (guild_id, thread_id),
         )
         return cast(DossierRow, dict(row)) if row else None
+
+    async def drop_owner_data(self, guild_id: int, owner_id: int) -> tuple[int, int]:
+        """Стереть дело, черновик и допуск участника. Возвращает ``(дел, черновики+допуски)``."""
+        counts: list[int] = []
+        for table in ("dossiers", "dossier_drafts", "admissions"):
+            cursor = await self.db.execute(
+                f"DELETE FROM {table} WHERE guild_id = ? AND owner_id = ?",  # noqa: S608 - имена таблиц фиксированы
+                (guild_id, owner_id),
+            )
+            counts.append(max(int(cursor.rowcount), 0))
+        return counts[0], counts[1] + counts[2]

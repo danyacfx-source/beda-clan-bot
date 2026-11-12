@@ -37,6 +37,7 @@ __all__ = [
     "SPECIALIZATIONS",
     "DossierPermissionError",
     "DossierValidationError",
+    "DeleteReport",
     "DossierService",
     "ResetReport",
     "available_gear",
@@ -337,6 +338,14 @@ class ResetReport:
     card_owners: list[int] = field(default_factory=list)  # владельцы дел с тредом, карточки которых нужно перерисовать
 
 
+@dataclass
+class DeleteReport:
+    """Итог ручного удаления дела: ``thread_deleted`` — None, если треда не было."""
+
+    thread_deleted: bool | None = None
+    thread_forbidden: bool = False  # тред не удалён из-за нехватки прав (иначе — другая ошибка Discord)
+
+
 class DossierService(BaseService["DossiersRepository"]):
     """Бизнес-логика личных дел поверх репозитория."""
 
@@ -580,7 +589,13 @@ class DossierService(BaseService["DossiersRepository"]):
             attachment.close()
 
         thread_id = int(thread.thread.id)
-        await self._repo.set_thread(guild.id, owner_id, thread_id)
+        if not await self._repo.set_thread(guild.id, owner_id, thread_id):
+            # Запись удалили, пока создавался тред: убираем тред и не выдаём роли.
+            try:
+                await thread.thread.delete()
+            except discord.HTTPException:
+                logger.warning("Не удалось убрать тред отменённой публикации guild=%s thread=%s", guild.id, thread_id)
+            raise DossierValidationError("Публикация отменена: дело было удалено во время создания.")
         return thread_id
 
     async def self_create_block_reason(
@@ -874,6 +889,53 @@ class DossierService(BaseService["DossiersRepository"]):
                 report.roles_failed_members,
             )
             return report
+
+    async def forget_thread(self, guild_id: int, thread_id: int) -> int | None:
+        """Стереть записи дела после удаления его треда. Возвращает владельца или None."""
+        try:
+            row = await self._repo.dossier_by_thread(guild_id, thread_id)
+            if row is None:
+                return None
+            owner_id = int(row["owner_id"])
+            await self._repo.drop_owner_data(guild_id, owner_id)
+        except Exception:
+            logger.exception("Не удалось стереть дело удалённого треда guild=%s thread=%s", guild_id, thread_id)
+            return None
+        logger.info("dossier_thread_deleted guild=%s owner=%s thread=%s", guild_id, owner_id, thread_id)
+        return owner_id
+
+    async def delete_dossier(self, guild: discord.Guild, owner_id: int, actor_id: int) -> DeleteReport:
+        """Удалить дело участника: тред, запись, черновик и допуск. Роли не трогаются."""
+        row = await self._repo.dossier(guild.id, owner_id)
+        if row is None:
+            _, extra = await self._repo.drop_owner_data(guild.id, owner_id)
+            if extra:
+                raise DossierValidationError(
+                    "Личного дела у участника нет. Черновик и допуск из тикета (если были) очищены."
+                )
+            raise DossierValidationError("Личного дела у участника нет.")
+        report = DeleteReport()
+        if row["thread_id"] is not None:
+            thread_id = int(row["thread_id"])
+            report.thread_deleted = True
+            try:
+                thread = guild.get_channel_or_thread(thread_id) or await guild.fetch_channel(thread_id)
+                await thread.delete(reason=f"Удаление личного дела администратором {actor_id}")
+            except discord.NotFound:
+                pass  # тред уже удалён
+            except discord.HTTPException as error:  # включая Forbidden
+                report.thread_deleted = False
+                report.thread_forbidden = isinstance(error, discord.Forbidden)
+                logger.warning("Не удалось удалить тред guild=%s owner=%s thread=%s", guild.id, owner_id, thread_id)
+        await self._repo.drop_owner_data(guild.id, owner_id)
+        logger.info(
+            "dossier_deleted guild=%s owner=%s actor=%s thread_deleted=%s",
+            guild.id,
+            owner_id,
+            actor_id,
+            report.thread_deleted,
+        )
+        return report
 
     async def _forum(self, guild: discord.Guild, forum_id: int) -> discord.ForumChannel:
         try:

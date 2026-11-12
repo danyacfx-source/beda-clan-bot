@@ -862,3 +862,199 @@ async def test_двойное_нажатие_подтверждения_сбра
     await view.confirm.callback(Inter())
     await view.cancel.callback(Inter())
     assert len(runs) == 1
+
+
+# --- удаление дел: ручное удаление треда и /dossier_delete ---
+
+
+class _DelThread:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.deleted = False
+
+    async def delete(self, **kwargs):
+        if self.error:
+            raise self.error
+        self.deleted = True
+
+
+class _DelGuild:
+    id = GUILD
+
+    def __init__(self, thread=None, fetch_error: Exception | None = None) -> None:
+        self.thread = thread
+        self.fetch_error = fetch_error
+
+    def get_channel_or_thread(self, _thread_id):
+        return self.thread
+
+    async def fetch_channel(self, _thread_id):
+        if self.fetch_error:
+            raise self.fetch_error
+        return self.thread
+
+
+def _discord_error(cls):
+    return cls(type("R", (), {"status": 404, "reason": "x"})(), "boom")
+
+
+async def _stale_rows(repo):
+    await repo.db.execute(
+        "INSERT INTO tickets (guild_id, channel_id, creator_id, status, created_at) VALUES (?, ?, ?, 'open', ?)",
+        (GUILD, CHANNEL, OWNER, "2026-09-29T12:00:00+00:00"),
+    )
+    await _ready(repo)
+    await repo.admit(GUILD, OWNER, CHANNEL)
+    await repo.save_draft(GUILD, OWNER, CHANNEL, "{}")
+
+
+async def test_forget_thread_стирает_дело_черновик_допуск(repo, service):
+    await _stale_rows(repo)
+    assert await service.forget_thread(GUILD, 777) == OWNER
+    assert await repo.dossier(GUILD, OWNER) is None
+    assert await repo.draft(GUILD, OWNER) is None
+    assert await repo.db.fetchone("SELECT 1 FROM admissions WHERE owner_id = ?", (OWNER,)) is None
+    assert await service.forget_thread(GUILD, 777) is None  # идемпотентно
+
+
+async def test_forget_thread_чужой_тред_не_ошибка(repo, service):
+    await _ready(repo)
+    assert await service.forget_thread(GUILD, 12345) is None
+    assert await repo.dossier(GUILD, OWNER) is not None
+
+
+async def test_delete_dossier_удаляет_тред_и_записи(repo, service):
+    await _stale_rows(repo)
+    thread = _DelThread()
+    report = await service.delete_dossier(_DelGuild(thread), OWNER, 5)
+    assert thread.deleted and report.thread_deleted is True
+    assert await repo.dossier(GUILD, OWNER) is None
+    assert await repo.draft(GUILD, OWNER) is None
+
+
+async def test_delete_dossier_тред_уже_удалён(repo, service):
+    import discord
+
+    await _ready(repo)
+    guild = _DelGuild(fetch_error=_discord_error(discord.NotFound))
+    report = await service.delete_dossier(guild, OWNER, 5)
+    assert report.thread_deleted is True
+    assert await repo.dossier(GUILD, OWNER) is None
+
+
+async def test_delete_dossier_forbidden_всё_равно_стирает_запись(repo, service):
+    import discord
+
+    await _ready(repo)
+    guild = _DelGuild(_DelThread(_discord_error(discord.Forbidden)))
+    report = await service.delete_dossier(guild, OWNER, 5)
+    assert report.thread_deleted is False
+    assert await repo.dossier(GUILD, OWNER) is None
+
+
+async def test_delete_dossier_без_записи_ошибка_но_чистит_черновик(repo, service):
+    await repo.save_draft(GUILD, OWNER, CHANNEL, "{}")
+    with pytest.raises(DossierValidationError, match="нет"):
+        await service.delete_dossier(_DelGuild(), OWNER, 5)
+    assert await repo.draft(GUILD, OWNER) is None
+
+
+async def test_delete_dossier_зависшая_публикация(repo, service):
+    await repo.reserve(GUILD, OWNER, "{}")
+    report = await service.delete_dossier(_DelGuild(), OWNER, 5)
+    assert report.thread_deleted is None
+    assert await repo.dossier(GUILD, OWNER) is None
+
+
+async def test_после_удаления_дело_создаётся_заново(repo, direct):
+    service, _forum, guild = direct
+    await service.create_direct(guild, _DirectMember(), "Медик", "Пилот", 5)
+    await service.delete_dossier(_DelGuild(_DelThread()), OWNER, 5)
+    outcome, _ = await service.create_direct(guild, _DirectMember(), "Медик", "Пилот", 5)
+    assert outcome == "ready"
+
+
+async def test_двойное_нажатие_удаления_выполняет_один_раз():
+    from app.cogs.administration.dossiers import DeleteConfirmView
+
+    runs = []
+
+    class Cog:
+        async def run_delete(self, interaction, guild, owner_id):
+            runs.append(owner_id)
+
+    class Resp:
+        async def defer(self, **kwargs):
+            pass
+
+    class Inter:
+        guild = object()
+        response = Resp()
+
+        async def edit_original_response(self, **kwargs):
+            pass
+
+    view = DeleteConfirmView(Cog(), 1, 42)
+    await view.confirm.callback(Inter())
+    await view.confirm.callback(Inter())
+    assert runs == [42]
+
+
+async def test_гонка_удаления_во_время_создания_треда(repo, direct):
+    service, forum, guild = direct
+    deleted = []
+
+    class Thread:
+        id = 950
+
+        async def delete(self, **kwargs):
+            deleted.append(self.id)
+
+    async def racing_create_thread(**kwargs):
+        await repo.drop(GUILD, OWNER)  # админ удалил зарезервированную запись
+        return type("T", (), {"thread": Thread()})()
+
+    forum.create_thread = racing_create_thread
+    member = _DirectMember()
+    with pytest.raises(DossierValidationError, match="Публикация отменена"):
+        await service.create_direct(guild, member, "Медик", "Пилот", 5)
+    assert deleted == [950]
+    assert member.added == []
+    assert await repo.dossier(GUILD, OWNER) is None
+
+
+async def test_delete_dossier_forbidden_и_другая_ошибка_различаются(repo, service):
+    import discord
+
+    await _ready(repo)
+    report = await service.delete_dossier(_DelGuild(_DelThread(_discord_error(discord.Forbidden))), OWNER, 5)
+    assert report.thread_forbidden is True
+    await _ready(repo)
+    report = await service.delete_dossier(_DelGuild(_DelThread(_discord_error(discord.HTTPException))), OWNER, 5)
+    assert report.thread_deleted is False and report.thread_forbidden is False
+
+
+async def test_нет_дела_сообщение_про_черновик_только_если_он_был(repo, service):
+    with pytest.raises(DossierValidationError) as plain:
+        await service.delete_dossier(_DelGuild(), OWNER, 5)
+    assert "Черновик" not in str(plain.value.user_message)
+    await repo.save_draft(GUILD, OWNER, CHANNEL, "{}")
+    with pytest.raises(DossierValidationError) as extra:
+        await service.delete_dossier(_DelGuild(), OWNER, 5)
+    assert "Черновик" in extra.value.user_message
+
+
+async def test_cog_слушает_удаление_треда(service, monkeypatch):
+    from app.cogs.administration.dossiers import DossierCog
+
+    assert any(name == "on_raw_thread_delete" for name, _ in DossierCog.__cog_listeners__)
+    calls = []
+
+    async def fake_forget(guild_id, thread_id):
+        calls.append((guild_id, thread_id))
+
+    monkeypatch.setattr(service, "forget_thread", fake_forget)
+    cog = DossierCog.__new__(DossierCog)
+    cog.dossiers = service
+    await cog.on_raw_thread_delete(type("P", (), {"guild_id": GUILD, "thread_id": 777})())
+    assert calls == [(GUILD, 777)]

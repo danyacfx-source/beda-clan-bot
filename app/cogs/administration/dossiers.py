@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
+from discord.ext import commands
 
 from app.core import embeds
 from app.core.base import ClanCog
@@ -815,6 +816,7 @@ class ResetConfirmView(discord.ui.View):
         self.cog = cog
         self.invoker_id = invoker_id
         self.interaction = interaction
+        self.message: discord.WebhookMessage | None = None  # сообщение с кнопками (followup)
         self._claimed = False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -848,9 +850,14 @@ class ResetConfirmView(discord.ui.View):
             logger.debug("Не удалось отключить панель сброса", exc_info=True)
 
     async def on_timeout(self) -> None:
-        if self._claimed or self.interaction is None:
+        if self._claimed or self.message is None:
             return
-        await self._disable(self.interaction)
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        try:
+            await self.message.edit(view=self)
+        except discord.HTTPException:
+            logger.debug("Не удалось отключить панель по таймауту", exc_info=True)
 
     @discord.ui.button(label="Сбросить", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -872,6 +879,84 @@ class ResetConfirmView(discord.ui.View):
             return
         await self._disable(interaction)
         await interaction.followup.send(embed=embeds.info("Сброс личных дел", "Отменено."), ephemeral=True)
+
+
+class DeleteConfirmView(discord.ui.View):
+    """Подтверждение удаления дела: нажать может только вызвавший администратор."""
+
+    def __init__(
+        self, cog: DossierCog, invoker_id: int, owner_id: int, interaction: discord.Interaction | None = None
+    ) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.invoker_id = invoker_id
+        self.owner_id = owner_id
+        self.interaction = interaction
+        self.message: discord.WebhookMessage | None = None  # сообщение с кнопками (followup)
+        self._claimed = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        allowed = (
+            int(user.id) == self.invoker_id
+            and isinstance(user, discord.Member)
+            and user.guild_permissions.administrator
+        )
+        if not allowed:
+            await interaction.response.send_message(
+                embed=embeds.error("Удаление дела", "Подтвердить может только вызвавший команду администратор."),
+                ephemeral=True,
+            )
+        return allowed
+
+    def _claim(self) -> bool:
+        if self._claimed:
+            return False
+        self._claimed = True
+        self.stop()
+        return True
+
+    async def _disable(self, interaction: discord.Interaction) -> None:
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            logger.debug("Не удалось отключить панель удаления", exc_info=True)
+
+    async def on_timeout(self) -> None:
+        if self._claimed or self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+        try:
+            await self.message.edit(view=self)
+        except discord.HTTPException:
+            logger.debug("Не удалось отключить панель по таймауту", exc_info=True)
+
+    @discord.ui.button(label="Удалить", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        claimed = self._claim()
+        await interaction.response.defer(ephemeral=True)
+        if not claimed:
+            return
+        await self._disable(interaction)
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send(
+                embed=embeds.error("Удаление дела", "Команда доступна только на сервере."), ephemeral=True
+            )
+            return
+        await self.cog.run_delete(interaction, guild, self.owner_id)
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        claimed = self._claim()
+        await interaction.response.defer(ephemeral=True)
+        if not claimed:
+            return
+        await self._disable(interaction)
+        await interaction.followup.send(embed=embeds.info("Удаление дела", "Отменено."), ephemeral=True)
 
 
 class DossierCog(ClanCog, name="Dossiers"):
@@ -956,7 +1041,7 @@ class DossierCog(ClanCog, name="Dossiers"):
             + "\n**Действие необратимо.**",
         )
         view = ResetConfirmView(self, int(interaction.user.id), interaction)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
 
     async def run_reset(self, interaction: discord.Interaction, guild: discord.Guild) -> None:
         """Выполнить сброс и перерисовать карточки; итог отправляется follow-up'ом."""
@@ -1006,6 +1091,49 @@ class DossierCog(ClanCog, name="Dossiers"):
             await interaction.followup.send(embed=embed, ephemeral=True)
         except discord.HTTPException:
             logger.warning("Не удалось отправить итог сброса личных дел", exc_info=True)
+
+    @commands.Cog.listener()
+    async def on_raw_thread_delete(self, payload: discord.RawThreadDeleteEvent) -> None:
+        """Тред дела удалён вручную: стираем запись, чтобы участник мог создать новое."""
+        await self.dossiers.forget_thread(int(payload.guild_id), int(payload.thread_id))
+
+    @app_commands.command(
+        name="dossier_delete",
+        description="Удалить личное дело участника (тред и запись; роли не трогаются)",
+    )
+    @app_commands.describe(member="Участник (можно указать ID ушедшего с сервера)")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.guild_only()
+    async def dossier_delete(self, interaction: discord.Interaction, member: discord.User) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        embed = embeds.warning(
+            "Удаление дела",
+            f"Удалить личное дело <@{member.id}>? Тред будет удалён, запись в боте стёрта, роли не трогаются.",
+        )
+        view = DeleteConfirmView(self, int(interaction.user.id), int(member.id), interaction)
+        view.message = await interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+
+    async def run_delete(self, interaction: discord.Interaction, guild: discord.Guild, owner_id: int) -> None:
+        try:
+            report = await self.dossiers.delete_dossier(guild, owner_id, int(interaction.user.id))
+        except (DossierValidationError, DossierPermissionError) as error:
+            await self._safe_send(interaction, embeds.error("Удаление дела", _error_text(error)))
+            return
+        except Exception:
+            logger.exception("Не удалось удалить личное дело")
+            await self._safe_send(
+                interaction,
+                embeds.error("Удаление дела", "Не удалось удалить дело. Подробности в консоли бота."),
+            )
+            return
+        lines = [f"Личное дело <@{owner_id}> удалено из бота. Роли не тронуты."]
+        if report.thread_deleted is True:
+            lines.append("Тред удалён.")
+        elif report.thread_deleted is False:
+            reason = "нет прав" if report.thread_forbidden else "Discord вернул ошибку"
+            lines.append(f"Тред удалить не удалось ({reason}) — удалите его вручную. Запись в боте стёрта.")
+        await self._safe_send(interaction, embeds.success("Дело удалено", "\n".join(lines)))
 
     @app_commands.command(
         name="dossier_panel",

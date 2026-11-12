@@ -89,6 +89,7 @@ _CATEGORIES = (
                 "dossier_card",
                 "dossier_add",
                 "dossier_reset",
+                "dossier_delete",
                 "dossier_panel",
                 "setup",
                 "setup_vacations",
